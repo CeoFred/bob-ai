@@ -1,0 +1,23 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Data & Storage
+.bob/
+.bob_data/
+*.log
+*.pid
+screenshots/
+
+# Web / Node
+node_modules/
+web/node_modules/
+web/dist/
+
+# OS
+.DS_Store
+.env

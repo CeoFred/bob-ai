@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Bob Agent Management CLI
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+BIN_PATH="$ROOT_DIR/bin/bob"
+
+DATA_DIR="$HOME/.bob"
+if ! mkdir -p "$DATA_DIR" 2>/dev/null; then
+  DATA_DIR="$ROOT_DIR/.bob_data"
+  mkdir -p "$DATA_DIR"
+fi
+
+PID_FILE="$DATA_DIR/bob.pid"
+LOG_FILE="$DATA_DIR/bob.log"
+
+case "$1" in
+  start)
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      echo "🤖 Bob is already running (PID: $(cat "$PID_FILE"))"
+      exit 0
+    fi
+
+    if [ ! -f "$BIN_PATH" ]; then
+      echo "Building Bob binary..."
+      (cd "$ROOT_DIR" && go build -o "$BIN_PATH" cmd/bob/main.go)
+    fi
+
+    echo "🚀 Starting Bob background daemon..."
+    nohup "$BIN_PATH" > "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+    echo "✓ Bob started with PID: $(cat "$PID_FILE")"
+    echo "• Logs: $LOG_FILE"
+    echo "• UI:   http://localhost:8787"
+    ;;
+
+  stop)
+    if [ -f "$PID_FILE" ]; then
+      PID=$(cat "$PID_FILE")
+      if kill -0 "$PID" 2>/dev/null; then
+        echo "🛑 Stopping Bob (PID: $PID)..."
+        kill -TERM "$PID"
+        rm -f "$PID_FILE"
+        echo "✓ Bob stopped."
+      else
+        echo "Bob is not currently running."
+        rm -f "$PID_FILE"
+      fi
+    else
+      echo "No PID file found. Checking for running bob processes..."
+      pkill -f "bin/bob" || echo "No running bob process found."
+    fi
+    ;;
+
+  status)
+    if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      echo "🟢 Bob is running (PID: $(cat "$PID_FILE"))"
+      curl -s http://localhost:8787/health | grep -q "ok" && echo "✓ Health check OK" || echo "⚠️ HTTP health check failed"
+    else
+      echo "⚪ Bob is stopped."
+    fi
+    ;;
+
+  logs)
+    if [ -f "$LOG_FILE" ]; then
+      tail -f -n 50 "$LOG_FILE"
+    else
+      echo "Log file not found at $LOG_FILE"
+    fi
+    ;;
+
+  sysinfo)
+    if [ ! -f "$BIN_PATH" ]; then
+      (cd "$ROOT_DIR" && go build -o "$BIN_PATH" cmd/bob/main.go)
+    fi
+    "$BIN_PATH" -sysinfo
+    ;;
+
+  build)
+    echo "Building Bob backend & frontend..."
+    (cd "$ROOT_DIR/web" && npm run build)
+    (cd "$ROOT_DIR" && go build -o "$BIN_PATH" cmd/bob/main.go)
+    echo "✓ Build complete: $BIN_PATH"
+    ;;
+
+  dev)
+    echo "Starting Bob in foreground development mode..."
+    if [ ! -f "$BIN_PATH" ]; then
+      (cd "$ROOT_DIR" && go build -o "$BIN_PATH" cmd/bob/main.go)
+    fi
+    exec "$BIN_PATH"
+    ;;
+
+  *)
+    echo "Usage: bob {start|stop|status|logs|sysinfo|build|dev}"
+    exit 1
+    ;;
+esac
