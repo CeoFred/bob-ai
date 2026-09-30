@@ -184,3 +184,38 @@ func TestAgent_TaskCancellation(t *testing.T) {
 		t.Errorf("expected cancelled status, got %s", tObj.Status)
 	}
 }
+
+func TestAgent_MarkdownToolCallExtraction(t *testing.T) {
+	// LLM outputs markdown json blocks instead of structured tool_calls
+	step1 := llm.ChatResponse{
+		Message: llm.Message{
+			Role: llm.RoleAssistant,
+			Content: "Sure, let's get started.\n\n1. Finding directory:\n```json\n{\"name\": \"terminal_exec\", \"arguments\": {\"command\": \"pwd\"}}\n```\n",
+		},
+	}
+
+	step2 := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "The current directory is verified.",
+		},
+		FinishReason: "stop",
+	}
+
+	ag, _, _, _ := setupTestAgent(t, step1, step2)
+	task := ag.CreateTask("", "Where are you running from?")
+
+	ag.Run(context.Background(), task)
+
+	time.Sleep(200 * time.Millisecond)
+
+	tObj, _ := ag.GetTask(task.ID)
+	if tObj.Status != agent.StatusCompleted {
+		t.Fatalf("expected task completed, got %s (error: %s)", tObj.Status, tObj.Error)
+	}
+
+	if tObj.Result != "The current directory is verified." {
+		t.Errorf("got %q, want %q", tObj.Result, "The current directory is verified.")
+	}
+}
+

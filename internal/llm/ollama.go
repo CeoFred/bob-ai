@@ -63,8 +63,8 @@ type ollamaToolCall struct {
 }
 
 type ollamaFunctionCall struct {
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
 }
 
 type ollamaChatResponse struct {
@@ -135,13 +135,19 @@ func (o *OllamaLLM) Chat(ctx context.Context, request ChatRequest) (ChatResponse
 	}
 
 	for i, tc := range ollamaResp.Message.ToolCalls {
-		argsBytes, _ := json.Marshal(tc.Function.Arguments)
+		rawArgs := tc.Function.Arguments
+		// If arguments was a JSON string (e.g. "{\"command\": \"pwd\"}"), unquote it
+		var unquoted string
+		if err := json.Unmarshal(rawArgs, &unquoted); err == nil {
+			rawArgs = []byte(unquoted)
+		}
+
 		msg.ToolCalls = append(msg.ToolCalls, ToolCall{
 			ID:   fmt.Sprintf("call_%d", i+1),
 			Type: "function",
 			Function: FunctionCall{
 				Name:      tc.Function.Name,
-				Arguments: argsBytes,
+				Arguments: rawArgs,
 			},
 		})
 	}
@@ -234,13 +240,17 @@ func (o *OllamaLLM) Stream(ctx context.Context, request ChatRequest) (<-chan Str
 			var tc *ToolCall
 			if len(chunk.Message.ToolCalls) > 0 {
 				first := chunk.Message.ToolCalls[0]
-				argsBytes, _ := json.Marshal(first.Function.Arguments)
+				rawArgs := first.Function.Arguments
+				var unquoted string
+				if err := json.Unmarshal(rawArgs, &unquoted); err == nil {
+					rawArgs = []byte(unquoted)
+				}
 				tc = &ToolCall{
 					ID:   "call_stream_1",
 					Type: "function",
 					Function: FunctionCall{
 						Name:      first.Function.Name,
-						Arguments: argsBytes,
+						Arguments: rawArgs,
 					},
 				}
 			}
@@ -269,12 +279,10 @@ func toOllamaMessages(msgs []Message) []ollamaMessage {
 			Content: m.Content,
 		}
 		for _, tc := range m.ToolCalls {
-			var args map[string]any
-			_ = json.Unmarshal(tc.Function.Arguments, &args)
 			om.ToolCalls = append(om.ToolCalls, ollamaToolCall{
 				Function: ollamaFunctionCall{
 					Name:      tc.Function.Name,
-					Arguments: args,
+					Arguments: tc.Function.Arguments,
 				},
 			})
 		}

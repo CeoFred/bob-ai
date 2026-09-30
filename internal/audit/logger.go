@@ -10,18 +10,33 @@ import (
 	"bob/internal/security"
 )
 
+// ActionType represents category of audited event.
+type ActionType string
+
+const (
+	ActionTaskStart        ActionType = "TASK_START"
+	ActionStepReasoning    ActionType = "STEP_REASONING"
+	ActionToolExec         ActionType = "TOOL_EXEC"
+	ActionApprovalRequest  ActionType = "APPROVAL_REQUEST"
+	ActionApprovalDecision ActionType = "APPROVAL_DECISION"
+	ActionTaskComplete     ActionType = "TASK_COMPLETE"
+	ActionTaskFail         ActionType = "TASK_FAIL"
+	ActionTaskCancel       ActionType = "TASK_CANCEL"
+)
+
 // Entry represents an immutable structured audit log record.
 type Entry struct {
-	Timestamp      string `json:"timestamp"`
-	TaskID         string `json:"task_id"`
-	SessionID      string `json:"session_id"`
-	Tool           string `json:"tool"`
-	Input          any    `json:"input"`
-	Result         any    `json:"result"`
-	ExitCode       int    `json:"exit_code"`
-	DurationMs     int64  `json:"duration_ms"`
-	ApprovalStatus string `json:"approval_status"`
-	Error          string `json:"error,omitempty"`
+	Timestamp      string     `json:"timestamp"`
+	TaskID         string     `json:"task_id"`
+	SessionID      string     `json:"session_id"`
+	Action         ActionType `json:"action,omitempty"`
+	Tool           string     `json:"tool,omitempty"`
+	Input          any        `json:"input,omitempty"`
+	Result         any        `json:"result,omitempty"`
+	ExitCode       int        `json:"exit_code"`
+	DurationMs     int64      `json:"duration_ms"`
+	ApprovalStatus string     `json:"approval_status,omitempty"`
+	Error          string     `json:"error,omitempty"`
 }
 
 // Logger persists structured audit records safely.
@@ -50,13 +65,22 @@ func NewLogger(logPath string, redactor *security.Redactor) (*Logger, error) {
 	}, nil
 }
 
-// Log records a tool execution event.
+// Log records an audit event and flushes immediately.
 func (l *Logger) Log(entry Entry) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	if entry.Timestamp == "" {
 		entry.Timestamp = time.Now().Format(time.RFC3339Nano)
+	}
+
+	// Default Action if not specified
+	if entry.Action == "" {
+		if entry.Tool != "" {
+			entry.Action = ActionToolExec
+		} else {
+			entry.Action = ActionStepReasoning
+		}
 	}
 
 	// Marshal and redact
@@ -70,6 +94,8 @@ func (l *Logger) Log(entry Entry) error {
 	if _, err := l.file.WriteString(redactedString + "\n"); err != nil {
 		return fmt.Errorf("failed to write audit entry: %w", err)
 	}
+
+	_ = l.file.Sync() // Ensure immediate persistence to disk
 
 	return nil
 }

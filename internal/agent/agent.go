@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,11 +18,18 @@ import (
 
 const BobSystemPrompt = `You are Bob, a local personal computer agent running on the user’s Mac. Your job is to help the user accomplish tasks by reasoning about requests and using authorized tools on the computer.
 
-Key behaviors:
-1. Be concise, direct, and action-oriented. Avoid verbose chatter or long conversational filler.
-2. If inspecting a project or system, use the appropriate tools (terminal_exec, read_file, list_directory, search_files, take_screenshot).
-3. Always verify commands before running them.
-4. When reporting results, summarize key findings clearly.`
+You have access to the following authorized tools on the Mac:
+- terminal_exec(command, work_dir, timeout_seconds): Executes shell commands (e.g. pwd, ls -la, git status, go test).
+- read_file(path, start_line, end_line): Reads file contents.
+- write_file(path, content): Creates or updates files.
+- list_directory(path): Lists directory contents.
+- search_files(directory, name_pattern, text_query): Searches for files or contents.
+- take_screenshot(label): Captures the macOS display.
+
+INSTRUCTIONS:
+1. When asked to perform actions on the computer (inspecting files, running commands, taking screenshots), you MUST invoke the appropriate tool.
+2. Do NOT simply output code snippets or descriptions of commands unless asked. Execute them.
+3. Be concise and action-oriented. Inspect first, execute, and report findings.`
 
 type EventListener func(event Event)
 
@@ -107,6 +116,16 @@ func (a *Agent) CreateTask(sessionID string, prompt string) *Task {
 
 	a.tasks[taskID] = task
 	a.sessionManager.AssociateTask(sessionID, taskID)
+
+	// Audit log task creation
+	a.recordAudit(audit.Entry{
+		TaskID:    taskID,
+		SessionID: sessionID,
+		Action:    audit.ActionTaskStart,
+		Input:     prompt,
+		Result:    "Task queued",
+	})
+
 	return task
 }
 
@@ -158,6 +177,13 @@ func (a *Agent) CancelTask(taskID string) error {
 	task.UpdatedAt = time.Now()
 	a.mu.Unlock()
 
+	a.recordAudit(audit.Entry{
+		TaskID:    taskID,
+		SessionID: task.SessionID,
+		Action:    audit.ActionTaskCancel,
+		Result:    "Task cancelled by user",
+	})
+
 	a.emitEvent(task, Event{
 		Type:      EventTaskStatusChanged,
 		TaskID:    taskID,
@@ -184,10 +210,28 @@ func (a *Agent) ApproveTool(taskID string, approved bool) error {
 	}
 
 	respCh := task.PendingApproval.ResponseCh
+	toolName := task.PendingApproval.ToolName
+	inputVal := task.PendingApproval.Input
+
 	task.PendingApproval = nil
 	task.Status = StatusRunning
 	task.UpdatedAt = time.Now()
 	a.mu.Unlock()
+
+	decisionStr := "APPROVED"
+	if !approved {
+		decisionStr = "REJECTED"
+	}
+
+	a.recordAudit(audit.Entry{
+		TaskID:         taskID,
+		SessionID:      task.SessionID,
+		Action:         audit.ActionApprovalDecision,
+		Tool:           toolName,
+		Input:          inputVal,
+		ApprovalStatus: decisionStr,
+		Result:         fmt.Sprintf("User %s tool execution", strings.ToLower(decisionStr)),
+	})
 
 	if respCh != nil {
 		respCh <- approved
@@ -273,7 +317,15 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 			Type:      EventAgentThinking,
 			TaskID:    task.ID,
 			SessionID: task.SessionID,
-			Message:   "Reasoning about next action...",
+			Message:   fmt.Sprintf("Step %d: Reasoning about next action...", stepCount),
+		})
+
+		a.recordAudit(audit.Entry{
+			TaskID:    task.ID,
+			SessionID: task.SessionID,
+			Action:    audit.ActionStepReasoning,
+			Input:     fmt.Sprintf("Step %d", stepCount),
+			Result:    "Prompting LLM with conversation history and tools",
 		})
 
 		chatReq := llm.ChatRequest{
@@ -289,6 +341,18 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 		}
 
 		assistantMsg := resp.Message
+
+		// If no native tool calls returned, attempt fallback parsing from text content
+		if len(assistantMsg.ToolCalls) == 0 {
+			extractedCalls, cleanText := a.extractToolCallsFromContent(assistantMsg.Content)
+			if len(extractedCalls) > 0 {
+				assistantMsg.ToolCalls = extractedCalls
+				if cleanText != "" {
+					assistantMsg.Content = cleanText
+				}
+			}
+		}
+
 		messages = append(messages, assistantMsg)
 
 		// Check if LLM requested tool execution
@@ -341,7 +405,17 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 
 				if level == security.PolicyBlocked {
 					errOut := fmt.Sprintf("Command blocked by security policy: %s", reason)
-					a.recordAudit(task.ID, task.SessionID, toolName, in, errOut, 1, 0, "BLOCKED")
+					a.recordAudit(audit.Entry{
+						TaskID:         task.ID,
+						SessionID:      task.SessionID,
+						Action:         audit.ActionToolExec,
+						Tool:           toolName,
+						Input:          in.Command,
+						Result:         errOut,
+						ExitCode:       1,
+						ApprovalStatus: "BLOCKED",
+						Error:          reason,
+					})
 					messages = append(messages, llm.Message{
 						Role:       llm.RoleTool,
 						Name:       toolName,
@@ -366,6 +440,16 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 					}
 					a.mu.Unlock()
 
+					a.recordAudit(audit.Entry{
+						TaskID:         task.ID,
+						SessionID:      task.SessionID,
+						Action:         audit.ActionApprovalRequest,
+						Tool:           toolName,
+						Input:          in.Command,
+						ApprovalStatus: "PENDING",
+						Result:         reason,
+					})
+
 					a.emitEvent(task, Event{
 						Type:      EventToolApprovalRequired,
 						TaskID:    task.ID,
@@ -387,7 +471,6 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 					if !approved {
 						approvalStatus = "REJECTED"
 						rejectMsg := "User rejected execution of command"
-						a.recordAudit(task.ID, task.SessionID, toolName, in, rejectMsg, 1, 0, approvalStatus)
 						messages = append(messages, llm.Message{
 							Role:       llm.RoleTool,
 							Name:       toolName,
@@ -407,7 +490,18 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 				exitCode = 1
 			}
 
-			a.recordAudit(task.ID, task.SessionID, toolName, string(rawArgs), res.Output, exitCode, res.DurationMs, approvalStatus)
+			a.recordAudit(audit.Entry{
+				TaskID:         task.ID,
+				SessionID:      task.SessionID,
+				Action:         audit.ActionToolExec,
+				Tool:           toolName,
+				Input:          string(rawArgs),
+				Result:         res.Output,
+				ExitCode:       exitCode,
+				DurationMs:     res.DurationMs,
+				ApprovalStatus: approvalStatus,
+				Error:          res.Error,
+			})
 
 			a.emitEvent(task, Event{
 				Type:       EventToolCompleted,
@@ -435,6 +529,92 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 	}
 }
 
+// extractToolCallsFromContent parses JSON tool calls embedded inside markdown code blocks or raw text.
+func (a *Agent) extractToolCallsFromContent(content string) ([]llm.ToolCall, string) {
+	var calls []llm.ToolCall
+
+	// 1. Regex for ```json { ... } ``` or ``` { ... } ```
+	codeBlockRegex := regexp.MustCompile("(?s)```(?:json)?\\s*(\\{.*?\\})\\s*```")
+	matches := codeBlockRegex.FindAllStringSubmatch(content, -1)
+
+	for i, m := range matches {
+		if len(m) > 1 {
+			jsonStr := strings.TrimSpace(m[1])
+			if tc, ok := a.parseSingleToolCall(jsonStr, fmt.Sprintf("call_extracted_%d", i+1)); ok {
+				calls = append(calls, tc)
+			}
+		}
+	}
+
+	// 2. If no code block matched, look for standalone raw JSON objects { "name": "...", "arguments": { ... } }
+	if len(calls) == 0 {
+		rawObjRegex := regexp.MustCompile(`(?s)\{\s*"(?:name|tool)"\s*:\s*"([a-zA-Z0-9_]+)"\s*,\s*"(?:arguments|parameters|input)"\s*:\s*(\{.*?\})\s*\}`)
+		rawMatches := rawObjRegex.FindAllStringSubmatch(content, -1)
+		for i, rm := range rawMatches {
+			if len(rm) > 2 {
+				toolName := rm[1]
+				argsJSON := rm[2]
+				if _, exists := a.registry.Get(toolName); exists {
+					calls = append(calls, llm.ToolCall{
+						ID:   fmt.Sprintf("call_raw_%d", i+1),
+						Type: "function",
+						Function: llm.FunctionCall{
+							Name:      toolName,
+							Arguments: json.RawMessage(argsJSON),
+						},
+					})
+				}
+			}
+		}
+	}
+
+	return calls, content
+}
+
+func (a *Agent) parseSingleToolCall(jsonStr string, id string) (llm.ToolCall, bool) {
+	// Pattern 1: {"name": "terminal_exec", "arguments": {"command": "pwd"}}
+	var standardCall struct {
+		Name      string          `json:"name"`
+		Tool      string          `json:"tool"`
+		Arguments json.RawMessage `json:"arguments"`
+		Params    json.RawMessage `json:"parameters"`
+		Input     json.RawMessage `json:"input"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonStr), &standardCall); err == nil {
+		toolName := standardCall.Name
+		if toolName == "" {
+			toolName = standardCall.Tool
+		}
+
+		if toolName != "" {
+			if _, exists := a.registry.Get(toolName); exists {
+				args := standardCall.Arguments
+				if len(args) == 0 {
+					args = standardCall.Params
+				}
+				if len(args) == 0 {
+					args = standardCall.Input
+				}
+				if len(args) == 0 {
+					args = json.RawMessage("{}")
+				}
+
+				return llm.ToolCall{
+					ID:   id,
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      toolName,
+						Arguments: args,
+					},
+				}, true
+			}
+		}
+	}
+
+	return llm.ToolCall{}, false
+}
+
 func (a *Agent) finishTask(task *Task, status TaskStatus, result string, errMsg string) {
 	a.mu.Lock()
 	task.Status = status
@@ -442,6 +622,21 @@ func (a *Agent) finishTask(task *Task, status TaskStatus, result string, errMsg 
 	task.Error = errMsg
 	task.UpdatedAt = time.Now()
 	a.mu.Unlock()
+
+	action := audit.ActionTaskComplete
+	if status == StatusFailed {
+		action = audit.ActionTaskFail
+	} else if status == StatusCancelled {
+		action = audit.ActionTaskCancel
+	}
+
+	a.recordAudit(audit.Entry{
+		TaskID:    task.ID,
+		SessionID: task.SessionID,
+		Action:    action,
+		Result:    result,
+		Error:     errMsg,
+	})
 
 	a.emitEvent(task, Event{
 		Type:      EventTaskCompleted,
@@ -453,17 +648,8 @@ func (a *Agent) finishTask(task *Task, status TaskStatus, result string, errMsg 
 	})
 }
 
-func (a *Agent) recordAudit(taskID, sessionID, tool string, input any, result any, exitCode int, durationMs int64, approval string) {
+func (a *Agent) recordAudit(entry audit.Entry) {
 	if a.auditLogger != nil {
-		_ = a.auditLogger.Log(audit.Entry{
-			TaskID:         taskID,
-			SessionID:      sessionID,
-			Tool:           tool,
-			Input:          input,
-			Result:         result,
-			ExitCode:       exitCode,
-			DurationMs:     durationMs,
-			ApprovalStatus: approval,
-		})
+		_ = a.auditLogger.Log(entry)
 	}
 }

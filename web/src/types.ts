@@ -89,11 +89,12 @@ export interface AuditEntry {
   timestamp: string;
   task_id: string;
   session_id: string;
-  tool: string;
-  input: any;
-  result: any;
+  action?: string;
+  tool?: string;
+  input?: any;
+  result?: any;
   exit_code: number;
   duration_ms: number;
-  approval_status: string;
+  approval_status?: string;
   error?: string;
 }
