@@ -182,6 +182,14 @@ func LoadConfig(configPath string) (*Config, error) {
 		cfg.Storage.ScreenshotsDir = filepath.Join(dataDir, "screenshots")
 	}
 
+	// Expand ~ in all paths
+	cfg.Storage.DataDir = ExpandPath(cfg.Storage.DataDir)
+	cfg.Storage.AuditLogPath = ExpandPath(cfg.Storage.AuditLogPath)
+	cfg.Storage.ScreenshotsDir = ExpandPath(cfg.Storage.ScreenshotsDir)
+	for i, p := range cfg.Filesystem.AllowedPaths {
+		cfg.Filesystem.AllowedPaths[i] = ExpandPath(p)
+	}
+
 	// Ensure directories exist with fallback
 	if err := os.MkdirAll(cfg.Storage.DataDir, 0755); err != nil {
 		// Fallback to local workspace data directory
@@ -196,6 +204,19 @@ func LoadConfig(configPath string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// ExpandPath expands ~ to user home directory.
+func ExpandPath(path string) string {
+	if strings.HasPrefix(path, "~/") || path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			if path == "~" {
+				return home
+			}
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
 }
 
 // DetectSystemInfo probes the Mac host and recommends optimal models.
