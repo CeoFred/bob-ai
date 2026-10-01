@@ -176,11 +176,10 @@ func (t *WriteFileTool) Execute(ctx context.Context, rawInput json.RawMessage) (
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
 
-	// In conversation mode, file writes are strictly forbidden
-	if sc, ok := security.SessionFromContext(ctx); ok && (sc.Type == "conversation" || sc.ReadOnly) {
+	if sc, ok := security.SessionFromContext(ctx); ok && sc.ReadOnly {
 		return registry.ToolResult{
 			Success: false,
-			Error:   "File modifications are disabled in General Conversation mode. Switch to or start a Project session to modify project files.",
+			Error:   "File modifications are disabled in read-only mode.",
 		}, nil
 	}
 
@@ -205,6 +204,140 @@ func (t *WriteFileTool) Execute(ctx context.Context, rawInput json.RawMessage) (
 		Data: map[string]any{
 			"path":        validPath,
 			"bytes_wrote": len(in.Content),
+		},
+	}, nil
+}
+
+// ReplaceFileContentTool surgically replaces target text or line blocks within authorized files.
+type ReplaceFileContentTool struct {
+	validator *security.PathValidator
+}
+
+func NewReplaceFileContentTool(validator *security.PathValidator) *ReplaceFileContentTool {
+	return &ReplaceFileContentTool{validator: validator}
+}
+
+func (t *ReplaceFileContentTool) Name() string {
+	return "replace_file_content"
+}
+
+func (t *ReplaceFileContentTool) Description() string {
+	return "Surgically replaces a specific block of text or lines in an authorized file without rewriting the entire file. ALWAYS prefer this over write_file when editing existing files."
+}
+
+func (t *ReplaceFileContentTool) InputSchema() any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Path to the file to modify.",
+			},
+			"target_content": map[string]any{
+				"type":        "string",
+				"description": "The exact existing text or code block in the file to replace.",
+			},
+			"replacement_content": map[string]any{
+				"type":        "string",
+				"description": "The new replacement text or code block.",
+			},
+			"allow_multiple": map[string]any{
+				"type":        "boolean",
+				"description": "Whether to replace all occurrences if target_content appears multiple times (default: false).",
+			},
+		},
+		"required": []string{"path", "target_content", "replacement_content"},
+	}
+}
+
+type ReplaceFileContentInput struct {
+	Path               string `json:"path"`
+	TargetContent      string `json:"target_content"`
+	ReplacementContent string `json:"replacement_content"`
+	AllowMultiple      bool   `json:"allow_multiple,omitempty"`
+}
+
+func (t *ReplaceFileContentTool) Execute(ctx context.Context, rawInput json.RawMessage) (registry.ToolResult, error) {
+	var in ReplaceFileContentInput
+	if err := json.Unmarshal(rawInput, &in); err != nil {
+		return registry.ToolResult{Success: false, Error: err.Error()}, err
+	}
+
+	if sc, ok := security.SessionFromContext(ctx); ok && sc.ReadOnly {
+		return registry.ToolResult{
+			Success: false,
+			Error:   "File modifications are disabled in read-only mode.",
+		}, nil
+	}
+
+	if in.TargetContent == "" {
+		return registry.ToolResult{
+			Success: false,
+			Error:   "target_content cannot be empty; specify the exact text to replace",
+		}, fmt.Errorf("empty target_content")
+	}
+
+	validPath, err := t.validator.ValidatePathWithContext(ctx, in.Path)
+	if err != nil {
+		return registry.ToolResult{Success: false, Error: err.Error()}, err
+	}
+
+	stat, err := os.Stat(validPath)
+	if err != nil {
+		return registry.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("file not found: %s", validPath),
+		}, err
+	}
+
+	if stat.IsDir() {
+		return registry.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("path is a directory: %s", validPath),
+		}, fmt.Errorf("is a directory")
+	}
+
+	data, err := os.ReadFile(validPath)
+	if err != nil {
+		return registry.ToolResult{Success: false, Error: fmt.Sprintf("failed to read file: %v", err)}, err
+	}
+
+	fileContent := string(data)
+	count := strings.Count(fileContent, in.TargetContent)
+
+	if count == 0 {
+		return registry.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("target_content not found in %s. Please inspect the file content with read_file and provide the exact substring to replace.", filepath.Base(validPath)),
+		}, fmt.Errorf("target_content not found")
+	}
+
+	if count > 1 && !in.AllowMultiple {
+		return registry.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("target_content occurs %d times in %s. Provide more surrounding context lines to uniquely identify the block to replace, or set allow_multiple to true.", count, filepath.Base(validPath)),
+		}, fmt.Errorf("ambiguous target_content: multiple matches")
+	}
+
+	var newContent string
+	if in.AllowMultiple {
+		newContent = strings.ReplaceAll(fileContent, in.TargetContent, in.ReplacementContent)
+	} else {
+		newContent = strings.Replace(fileContent, in.TargetContent, in.ReplacementContent, 1)
+	}
+
+	if err := os.WriteFile(validPath, []byte(newContent), stat.Mode().Perm()); err != nil {
+		return registry.ToolResult{Success: false, Error: fmt.Sprintf("failed to write file: %v", err)}, err
+	}
+
+	return registry.ToolResult{
+		Success: true,
+		Output:  fmt.Sprintf("Successfully replaced target content in %s (%d occurrence(s) replaced)", validPath, count),
+		Data: map[string]any{
+			"path":                validPath,
+			"occurrences_matched": count,
+			"original_bytes":      len(fileContent),
+			"new_bytes":           len(newContent),
 		},
 	}, nil
 }

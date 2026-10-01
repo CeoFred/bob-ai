@@ -103,7 +103,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <Plus className="w-4 h-4 md:w-3.5 md:h-3.5 text-zinc-400" />
             <span className="flex-1 text-left">New Conversation</span>
-            <span className="text-[10px] text-zinc-500 font-normal">Read-Only</span>
+            <span className="text-[10px] text-zinc-500 font-normal">General</span>
           </button>
 
           <button

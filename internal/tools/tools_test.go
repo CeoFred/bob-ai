@@ -271,4 +271,100 @@ func TestAppTools_Registration(t *testing.T) {
 	}
 }
 
+func TestReplaceFileContentTool(t *testing.T) {
+	tempDir := t.TempDir()
+	validator := security.NewPathValidator([]string{tempDir})
+	replaceTool := filesystem.NewReplaceFileContentTool(validator)
+	writeTool := filesystem.NewWriteFileTool(validator)
+	readTool := filesystem.NewReadFileTool(validator, 1024*1024)
+
+	testFilePath := filepath.Join(tempDir, "code.go")
+
+	// 1. Setup initial file
+	initialCode := `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("Hello, old world!")
+	fmt.Println("Debug message")
+}
+`
+	writeIn, _ := json.Marshal(map[string]any{
+		"path":    testFilePath,
+		"content": initialCode,
+	})
+	if _, err := writeTool.Execute(context.Background(), writeIn); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// 2. Perform surgical replacement of a single block
+	replaceIn, _ := json.Marshal(map[string]any{
+		"path":                testFilePath,
+		"target_content":      `fmt.Println("Hello, old world!")`,
+		"replacement_content": `fmt.Println("Hello, Bob!")`,
+	})
+	repRes, err := replaceTool.Execute(context.Background(), replaceIn)
+	if err != nil || !repRes.Success {
+		t.Fatalf("replace_file_content failed: %v (%s)", err, repRes.Error)
+	}
+
+	// Verify content after replacement
+	readIn, _ := json.Marshal(map[string]any{"path": testFilePath})
+	readRes, _ := readTool.Execute(context.Background(), readIn)
+	if !strings.Contains(readRes.Output, `fmt.Println("Hello, Bob!")`) {
+		t.Errorf("expected replacement not found in file: %s", readRes.Output)
+	}
+	if strings.Contains(readRes.Output, `Hello, old world!`) {
+		t.Errorf("old content still present after replacement")
+	}
+
+	// 3. Test non-existent target_content (should fail)
+	badTargetIn, _ := json.Marshal(map[string]any{
+		"path":                testFilePath,
+		"target_content":      `non_existent_function_call()`,
+		"replacement_content": `something_else()`,
+	})
+	badRes, badErr := replaceTool.Execute(context.Background(), badTargetIn)
+	if badErr == nil || badRes.Success {
+		t.Errorf("expected error for non-existent target_content, got success")
+	}
+
+	// 4. Test multiple occurrences with allow_multiple = false (should fail)
+	dupeCode := "foo bar foo bar foo"
+	writeDupeIn, _ := json.Marshal(map[string]any{
+		"path":    testFilePath,
+		"content": dupeCode,
+	})
+	_, _ = writeTool.Execute(context.Background(), writeDupeIn)
+
+	ambigIn, _ := json.Marshal(map[string]any{
+		"path":                testFilePath,
+		"target_content":      "foo",
+		"replacement_content": "baz",
+		"allow_multiple":      false,
+	})
+	ambigRes, ambigErr := replaceTool.Execute(context.Background(), ambigIn)
+	if ambigErr == nil || ambigRes.Success {
+		t.Errorf("expected ambiguous replacement to fail without allow_multiple, got success")
+	}
+
+	// 5. Test multiple occurrences with allow_multiple = true (should succeed)
+	allowMultIn, _ := json.Marshal(map[string]any{
+		"path":                testFilePath,
+		"target_content":      "foo",
+		"replacement_content": "baz",
+		"allow_multiple":      true,
+	})
+	multRes, multErr := replaceTool.Execute(context.Background(), allowMultIn)
+	if multErr != nil || !multRes.Success {
+		t.Fatalf("expected allow_multiple to succeed, got error: %v (%s)", multErr, multRes.Error)
+	}
+
+	readRes, _ = readTool.Execute(context.Background(), readIn)
+	if readRes.Output != "baz bar baz bar baz" {
+		t.Errorf("got %q, want %q", readRes.Output, "baz bar baz bar baz")
+	}
+}
+
 

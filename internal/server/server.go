@@ -136,6 +136,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"agent_name": "Bob",
 		"status":     "online",
 		"system":     sysInfo,
+		"user":       s.cfg.User,
 		"llm": map[string]any{
 			"provider": s.cfg.LLM.Provider,
 			"model":    s.cfg.LLM.Model,

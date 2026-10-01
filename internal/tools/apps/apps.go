@@ -202,7 +202,7 @@ func (t *ListRunningAppsTool) Execute(ctx context.Context, rawInput json.RawMess
 	}, nil
 }
 
-// collectRunningApps attempts multiple inspection vectors: AppleScript (System Events) and PS table.
+// collectRunningApps combines AppleScript System Events and PS process table for comprehensive detection.
 func (t *ListRunningAppsTool) collectRunningApps(ctx context.Context, guiOnly bool, includeSystem bool) ([]AppInfo, string, string, error) {
 	var apps []AppInfo
 	var frontmostApp string
@@ -270,37 +270,43 @@ func (t *ListRunningAppsTool) collectRunningApps(ctx context.Context, guiOnly bo
 			}
 		}
 	} else {
-		notes = append(notes, "AppleScript query skipped or restricted, falling back to process scan")
+		notes = append(notes, "AppleScript query skipped or restricted, using process scan")
 	}
 
-	// If guiOnly and we obtained apps from AppleScript, we are good
-	if guiOnly && len(apps) > 0 {
-		return apps, frontmostApp, strings.Join(notes, "; "), nil
-	}
-
-	// Method 2: Process table inspection via `ps`
+	// Method 2: Process table inspection via `ps` - ALWAYS merge to capture all apps
 	psApps, errPs := parseProcessTable(ctx, guiOnly, includeSystem)
 	if errPs == nil && len(psApps) > 0 {
-		if len(apps) == 0 {
-			apps = psApps
-		} else {
-			// Merge metadata: add CPU/MEM to existing apps or append background apps if !guiOnly
-			existingPIDs := make(map[int]int)
-			for idx, a := range apps {
-				if a.PID > 0 {
-					existingPIDs[a.PID] = idx
-				}
+		existingPIDs := make(map[int]int)
+		existingNames := make(map[string]int)
+		for idx, a := range apps {
+			if a.PID > 0 {
+				existingPIDs[a.PID] = idx
 			}
+			existingNames[strings.ToLower(a.Name)] = idx
+		}
 
-			for _, p := range psApps {
-				if idx, exists := existingPIDs[p.PID]; exists {
-					apps[idx].CPUPercent = p.CPUPercent
-					apps[idx].MemoryPercent = p.MemoryPercent
-					if apps[idx].ExecutablePath == "" {
-						apps[idx].ExecutablePath = p.ExecutablePath
-					}
-				} else if !guiOnly {
+		for _, p := range psApps {
+			if idx, exists := existingPIDs[p.PID]; exists {
+				apps[idx].CPUPercent = p.CPUPercent
+				apps[idx].MemoryPercent = p.MemoryPercent
+				if apps[idx].ExecutablePath == "" {
+					apps[idx].ExecutablePath = p.ExecutablePath
+				}
+			} else if idx, nameExists := existingNames[strings.ToLower(p.Name)]; nameExists && apps[idx].PID == 0 {
+				apps[idx].PID = p.PID
+				apps[idx].CPUPercent = p.CPUPercent
+				apps[idx].MemoryPercent = p.MemoryPercent
+				if apps[idx].ExecutablePath == "" {
+					apps[idx].ExecutablePath = p.ExecutablePath
+				}
+			} else {
+				// If not in AppleScript results, add it if it matches GUI filter
+				if !guiOnly || p.IsGUIApp {
 					apps = append(apps, p)
+					existingNames[strings.ToLower(p.Name)] = len(apps) - 1
+					if p.PID > 0 {
+						existingPIDs[p.PID] = len(apps) - 1
+					}
 				}
 			}
 		}
@@ -311,7 +317,7 @@ func (t *ListRunningAppsTool) collectRunningApps(ctx context.Context, guiOnly bo
 	return apps, frontmostApp, strings.Join(notes, "; "), nil
 }
 
-var appBundleRegex = regexp.MustCompile(`/(?:Applications|System/Applications)/([^/]+)\.app(?:/|$)`)
+var appBundleRegex = regexp.MustCompile(`/(?:[^/]+/)*([^/]+)\.app(?:/|$)`)
 
 func parseProcessTable(ctx context.Context, guiOnly bool, includeSystem bool) ([]AppInfo, error) {
 	// Query ps with PID, %CPU, %MEM, Command
@@ -370,6 +376,14 @@ func parseProcessTable(ctx context.Context, guiOnly bool, includeSystem bool) ([
 			continue
 		}
 
+		// Avoid helper process naming duplicates for main apps
+		if strings.HasSuffix(appName, " Helper") || strings.HasSuffix(appName, " Helper (Renderer)") || strings.HasSuffix(appName, " Helper (GPU)") {
+			base := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(appName, " Helper (GPU)"), " Helper (Renderer)"), " Helper")
+			if base != "" {
+				appName = base
+			}
+		}
+
 		if guiOnly && !isGUI {
 			continue
 		}
@@ -378,11 +392,11 @@ func parseProcessTable(ctx context.Context, guiOnly bool, includeSystem bool) ([
 			continue
 		}
 
-		// Avoid spammy duplicates for multi-process apps (like Chrome/Electron helpers) when guiOnly is true
-		if guiOnly && seenNames[appName] {
+		// Avoid spammy duplicates for multi-process apps (like Chrome/Electron/WhatsApp helpers) when guiOnly is true
+		if guiOnly && seenNames[strings.ToLower(appName)] {
 			continue
 		}
-		seenNames[appName] = true
+		seenNames[strings.ToLower(appName)] = true
 
 		results = append(results, AppInfo{
 			Name:           appName,

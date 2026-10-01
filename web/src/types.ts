@@ -111,10 +111,18 @@ export interface SystemInfo {
   recommended_models: string[];
 }
 
+export interface UserConfig {
+  name: string;
+  alias?: string;
+  title?: string;
+  description?: string;
+}
+
 export interface SystemStatus {
   agent_name: string;
   status: string;
   system: SystemInfo;
+  user?: UserConfig;
   llm: {
     provider: string;
     model: string;

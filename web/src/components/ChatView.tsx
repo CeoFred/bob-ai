@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Task, AgentEvent, Session, Project } from '../types';
+import { Task, AgentEvent, Session, Project, UserConfig } from '../types';
 import { ToolActivity } from './ToolActivity';
 import { ApprovalBanner } from './ApprovalBanner';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -11,6 +11,7 @@ interface ChatViewProps {
   events: AgentEvent[];
   session?: Session | null;
   project?: Project | null;
+  user?: UserConfig | null;
   onSend: (prompt: string) => void;
   onCancel: (taskId: string) => void;
   onApprove: (taskId: string, approved: boolean) => void;
@@ -23,6 +24,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   events,
   session,
   project,
+  user,
   onSend,
   onCancel,
   onApprove,
@@ -77,9 +79,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   const getGreeting = () => {
     const hour = new Date().getHours();
-    if (hour < 12) return 'Good morning';
-    if (hour < 18) return 'Good afternoon';
-    return 'Good evening';
+    const timeGreeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+    const name = user?.name || 'codemon';
+    return `${timeGreeting}, ${name}`;
   };
 
   return (
@@ -127,13 +129,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <>
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-emerald-400 text-xs font-medium mb-1">
                     <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>General Mac Assistant (Read-Only)</span>
+                    <span>General Mac Assistant</span>
                   </div>
                   <h1 className="text-2xl sm:text-3xl font-medium tracking-tight text-zinc-100">
                     {getGreeting()}
                   </h1>
                   <p className="text-xs sm:text-sm text-zinc-400 max-w-md mx-auto">
-                    How can Bob help you on your Mac today? Scoped read-only access.
+                    How can Bob help you on your Mac today? Full desktop, terminal, file & app control.
                   </p>
                 </>
               )}
@@ -150,7 +152,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   placeholder={
                     isProjectMode
                       ? `Ask Bob about this project, search code, or run tests...`
-                      : 'Ask Bob to find info on your PC, take screenshots, or run diagnostics...'
+                      : 'Ask Bob to search code, run commands, manage apps, or take screenshots...'
                   }
                   rows={2}
                   className="w-full bg-transparent text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none px-2 py-1 leading-relaxed max-h-40"

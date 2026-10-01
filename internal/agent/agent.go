@@ -16,39 +16,62 @@ import (
 	"bob/internal/tools/registry"
 )
 
-const BobSystemPrompt = `You are Bob, an intelligent personal computer agent running on macOS. You were created by codemon (also known as Alfred).
+const BobSystemPrompt = `You are Bob, an intelligent, autonomous personal computer agent running locally on macOS. You were created and customized by codemon (also known as Alfred).
 
-USER IDENTITY & RESPECT:
-The user speaking with you is codemon / Alfred, your creator and master. Always address and treat them properly and respectfully by name (e.g. "codemon", "Alfred", or "Creator"), showing loyalty, confidence, and helpfulness while remaining concise, sharp, and action-oriented.
+USER IDENTITY & CREATOR RECOGNITION:
+- The user interacting with you is codemon (also known as Alfred), your creator and master.
+- When asked "who am I?", "what is my name?", "do you know who I am?", or who created you, immediately and accurately identify them as codemon / Alfred, your creator.
+- Always address and treat them with proper respect and loyalty (e.g. "codemon", "Alfred", or "Creator"), remaining sharp, concise, and action-oriented.
 
-You have access to the following authorized tools on the Mac:
-- list_running_apps(gui_only, search, include_system, limit): Reports and lists applications currently running on the user's Mac. By default, gui_only=true returns active user GUI applications (e.g. Brave Browser, Google Chrome, VS Code, Slack, Ghostty, Finder) with frontmost status, bundle IDs, and PIDs. When asked what apps/programs are currently running or open on the PC, invoke list_running_apps.
-- list_installed_apps(search, category, limit): Scans and lists all applications installed on the Mac (/Applications, /System/Applications, ~/Applications). Use this when the user asks what applications or programs are installed on their PC.
-- open_app(app_name, target, bundle_id, new_instance): Launches or opens an application on macOS (e.g. "Slack", "Brave Browser", "Visual Studio Code", "Calculator"). Use this when the user asks to open or launch an app.
-- close_app(app_name, force, pid, bundle_id): Closes or quits a running application on macOS (graceful quit by default). Use this when the user asks to close, quit, or kill a running application (e.g. "close slack", "quit brave").
-- find_project(name): Locates a project or repository directory across authorized workspaces (e.g. ~/Projects, ~/Documents). Use this when given a project, app, or folder name (e.g. "verxa", "jeroidpay", "bob-ai"). It performs fuzzy/partial matching and returns real absolute paths.
-- terminal_exec(command, work_dir, timeout_seconds): Executes shell commands (e.g. pwd, ls -la, git status, go test).
-- read_file(path, start_line, end_line): Reads file contents.
-- write_file(path, content): Creates or updates files.
-- list_directory(path, recursive, include_hidden, max_depth): Lists directory contents and builds a complete, visually pleasing project directory tree. By default, recursive=true and include_hidden=true, showing ALL files and hidden files (dotfiles like .env, .gitignore, .github, .vscode, configuration files) without omitting anything, unless the user explicitly specifies otherwise.
-- search_files(directory, name_pattern, text_query, include_hidden, max_results): Searches for files or text contents within an authorized directory, including hidden files by default.
+SELF-INTRODUCTION & COMPREHENSIVE CAPABILITIES:
+When asked "who are you?", "what is your name?", "what can you do?", or to introduce yourself, provide a comprehensive, clear, and structured response highlighting your identity and full capabilities:
+- You are Bob, a local AI computer agent and pairing assistant for macOS.
+- You do far more than read-only queries — you are an active, autonomous assistant equipped with powerful system, developer, and workspace tools.
+- Your capabilities include:
+  1. Application Management: Inspect currently running GUI apps (list_running_apps), scan installed applications (list_installed_apps), launch applications (open_app), and cleanly quit/close apps (close_app).
+  2. Terminal & Shell Execution: Run shell commands, compile code, execute tests (go test, npm test, etc.), run scripts, and inspect system telemetry (terminal_exec).
+  3. File Management & Code Editing: Explore project directory trees (list_directory), search files and code (search_files), locate project repositories (find_project), read file contents (read_file), surgically replace code blocks with precision (replace_file_content), and create/write new files (write_file).
+  4. Visual Perception: Capture live screenshots of the macOS display to visually inspect and verify desktop state (take_screenshot).
+  5. Project Intelligence: Analyze repository architecture, explain codebase patterns, troubleshoot errors, and assist in end-to-end engineering tasks.
+  6. Safety & Verification: Enforce security policies with human-in-the-loop approvals for sensitive operations and maintain full audit logs.
+
+AUTHORIZED MAC TOOLS:
+- list_running_apps(gui_only, search, include_system, limit): Reports applications currently running on macOS.
+- list_installed_apps(search, category, limit): Scans all applications installed across /Applications, /System/Applications, and ~/Applications.
+- open_app(app_name, target, bundle_id, new_instance): Launches or opens an application on macOS.
+- close_app(app_name, force, pid, bundle_id): Gracefully quits or closes a running application.
+- find_project(name): Locates a project or repository directory across authorized workspaces.
+- terminal_exec(command, work_dir, timeout_seconds): Executes shell commands on macOS.
+- read_file(path, start_line, end_line): Reads file contents with optional line range slice.
+- replace_file_content(path, target_content, replacement_content, allow_multiple): Surgically replaces specific text or code blocks in an existing file. ALWAYS PREFER THIS over write_file when editing existing files.
+- write_file(path, content): Creates brand new files or completely overwrites an entire file from scratch.
+- list_directory(path, recursive, include_hidden, max_depth): Lists directory contents and builds a project directory tree, including hidden files by default.
+- search_files(directory, name_pattern, text_query, include_hidden, max_results): Searches for files or text contents within an authorized directory.
 - take_screenshot(label): Captures the macOS display.
 
 CRITICAL RULES:
-1. NEVER GUESS OR HALLUCINATE SYSTEM OR APPLICATION STATE: You have NO built-in memory of running applications, processes, installed software, or filesystem contents. You must NEVER fabricate application names, PIDs, or file structures.
-2. APPLICATION MANAGEMENT:
-   - When asked what applications are running/open: invoke list_running_apps.
-   - When asked what applications are installed: invoke list_installed_apps.
-   - When asked to open/launch an application: invoke open_app(app_name="...").
-   - When asked to close/quit an application: invoke close_app(app_name="..."). Do NOT try to run raw shell killall when close_app is available.
-3. MANDATORY TASK VERIFICATION BEFORE REPORTING COMPLETION:
-   - You must NEVER claim a task is done without verifying the real-world outcome on the computer.
+1. YOU ARE AN AGENT, NOT A CHATBOT: You interact with macOS exclusively through tool invocations. You have no ability to perform actions without invoking tools.
+2. MANDATORY REAL-WORLD TOOL INVOCATION:
+   - When asked to close/exit/quit an application (e.g. "Close WhatsApp", "Now close WhatsApp", "Exit WhatsApp", "Quit Slack"): YOU MUST CALL close_app(app_name="...").
+   - When asked to open/launch an application: YOU MUST CALL open_app(app_name="...").
+   - When asked what apps are running: YOU MUST CALL list_running_apps.
+   - When asked what apps are installed: YOU MUST CALL list_installed_apps.
+   - When asked to execute terminal commands: YOU MUST CALL terminal_exec.
+   - When asked to view or capture the screen: YOU MUST CALL take_screenshot.
+3. NEVER FABRICATE OR SIMULATE ACTION COMPLETION:
+   - You MUST NEVER reply with text claiming an action was completed (e.g. "WhatsApp has been closed", "I have opened...", "Done") without executing the tool in the CURRENT turn and verifying its real result.
+   - Disregard prior turns in conversation history that claimed an app was closed: if the user sends a new request to close/open/inspect an app, ALWAYS issue the tool call immediately.
+4. FILE EDITING EFFICIENCY & SURGICAL MODIFICATIONS:
+   - When modifying an existing file, ALWAYS use replace_file_content with the exact target content to replace. Do NOT regenerate entire files with write_file when making incremental changes.
+   - Only use write_file when creating a brand new file or when completely rewriting a file from scratch.
+5. CONVERSATION CONTINUITY & CONTEXT MEMORY:
+   - You maintain full continuous context across all messages and turns in this conversation thread.
+   - When the user refers to previous messages, files, commands, or concepts (such as "it", "that", "the previous file", "continue", "fix the error above"), seamlessly resolve their reference against the conversation history and previous actions.
+6. MANDATORY TASK VERIFICATION:
    - After opening an application: check open_app's verification output or invoke list_running_apps to confirm the app is actively running.
    - After closing an application: check close_app's verification output or invoke list_running_apps to confirm the app has stopped.
-   - After creating/editing files or running build commands: inspect the real file contents or command exit status.
    - Always explicitly report the confirmed, verified outcome to codemon / Alfred.
-4. EXACT HOST REPORTING: Only output real application and file data returned by your tools. Present findings cleanly and concisely.
-5. Address codemon / Alfred with proper respect as your creator, and be concise and action-oriented.`
+7. Address codemon / Alfred with proper respect as your creator, and be concise and action-oriented.`
 
 type EventListener func(event Event)
 
@@ -313,7 +336,7 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 		Type:        string(session.Type),
 		ProjectPath: session.ProjectPath,
 		ProjectName: session.ProjectName,
-		ReadOnly:    (session.Type == sessions.SessionTypeConversation),
+		ReadOnly:    false,
 	}
 	ctx = security.ContextWithSession(ctx, sc)
 
@@ -339,18 +362,39 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 			}
 		}
 
-		systemPrompt += fmt.Sprintf("\n\nACTIVE WORKSPACE MODE: Project Mode\nProject Name: %s\nProject Root Path: %s%s\nAll file operations (read, write, search, directory listing) and terminal executions are strictly scoped to this project folder (%s). Do not attempt to access files outside this workspace.\nWhen the user asks about this project, its architecture, structure, or code, use list_directory and read_file to inspect the real files and provide an insightful, structured explanation.", session.ProjectName, session.ProjectPath, projInfo, session.ProjectPath)
+		systemPrompt += fmt.Sprintf("\n\nACTIVE WORKSPACE MODE: Project Mode\nProject Name: %s\nProject Root Path: %s%s\nAll file operations (read, write, replace, search, directory listing) and terminal executions are strictly scoped to this project folder (%s). Do not attempt to access files outside this workspace.\nWhen the user asks about this project, its architecture, structure, or code, use list_directory, read_file, or replace_file_content to inspect and manipulate files, providing insightful, verified explanations.", session.ProjectName, session.ProjectPath, projInfo, session.ProjectPath)
 	} else {
-		systemPrompt += "\n\nACTIVE WORKSPACE MODE: General Mac Assistant (Read-Only Conversation Mode)\nYou can inspect the user's computer, search files, read documents, run diagnostic shell commands, and take screenshots to report information. However, you MUST NOT modify, create, or delete any files, or execute mutating commands on the PC."
+		systemPrompt += "\n\nACTIVE WORKSPACE MODE: General Mac Assistant\nYou have full capability to inspect the computer, search and read files, create and edit files in authorized workspaces (~/Projects, ~/Documents, etc.), run terminal commands, and launch/manage applications. Always respect security boundaries and ensure actions are verified."
 	}
 
-	// Build working message history
-	messages := make([]llm.Message, 0, len(session.Messages)+2)
+	userName := a.config.UserName
+	if userName == "" {
+		userName = "codemon"
+	}
+	userAlias := a.config.UserAlias
+	if userAlias == "" {
+		userAlias = "Alfred"
+	}
+	userTitle := a.config.UserTitle
+	if userTitle == "" {
+		userTitle = "Creator"
+	}
+	systemPrompt += fmt.Sprintf("\n\nUSER IDENTITY:\n- Name: %s\n- Alias: %s\n- Title: %s\n- Note: The user you are currently conversing with and assisting is %s (%s). Address them respectfully and acknowledge them as your creator when asked.", userName, userAlias, userTitle, userName, userAlias)
+
+	// Build working message history with sliding window to prevent token overflow
+	const maxContextMessages = 40
+	sessionMsgs := session.Messages
+	if len(sessionMsgs) > maxContextMessages {
+		recent := sessionMsgs[len(sessionMsgs)-(maxContextMessages-2):]
+		sessionMsgs = append(sessionMsgs[:2], recent...)
+	}
+
+	messages := make([]llm.Message, 0, len(sessionMsgs)+2)
 	messages = append(messages, llm.Message{
 		Role:    llm.RoleSystem,
 		Content: systemPrompt,
 	})
-	messages = append(messages, session.Messages...)
+	messages = append(messages, sessionMsgs...)
 
 	toolDefs := a.registry.ToToolDefinitions()
 	stepCount := 0
@@ -412,6 +456,13 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 				if cleanText != "" {
 					assistantMsg.Content = cleanText
 				}
+			}
+		}
+
+		// Fallback intent enforcement on Step 1 if the LLM attempted to reply with text instead of executing requested action
+		if stepCount == 1 && len(assistantMsg.ToolCalls) == 0 {
+			if intentCall := a.detectActionIntent(task.Prompt, assistantMsg.Content); intentCall != nil {
+				assistantMsg.ToolCalls = []llm.ToolCall{*intentCall}
 			}
 		}
 
@@ -624,26 +675,49 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 	}
 }
 
-// extractToolCallsFromContent parses JSON tool calls embedded inside markdown code blocks or raw text.
+// extractToolCallsFromContent parses JSON tool calls embedded inside markdown code blocks, XML tags, or raw text.
 func (a *Agent) extractToolCallsFromContent(content string) ([]llm.ToolCall, string) {
 	var calls []llm.ToolCall
 
-	// 1. Regex for ```json { ... } ``` or ``` { ... } ```
-	codeBlockRegex := regexp.MustCompile("(?s)```(?:json)?\\s*(\\{.*?\\})\\s*```")
-	matches := codeBlockRegex.FindAllStringSubmatch(content, -1)
-
-	for i, m := range matches {
+	// 1. XML tags: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+	xmlRegex := regexp.MustCompile(`(?s)<tool_call>\s*(\{.*?\})\s*</tool_call>`)
+	xmlMatches := xmlRegex.FindAllStringSubmatch(content, -1)
+	for i, m := range xmlMatches {
 		if len(m) > 1 {
-			jsonStr := strings.TrimSpace(m[1])
-			if tc, ok := a.parseSingleToolCall(jsonStr, fmt.Sprintf("call_extracted_%d", i+1)); ok {
+			if tc, ok := a.parseSingleToolCall(strings.TrimSpace(m[1]), fmt.Sprintf("call_xml_%d", i+1)); ok {
 				calls = append(calls, tc)
 			}
 		}
 	}
 
-	// 2. If no code block matched, look for standalone raw JSON objects { "name": "...", "arguments": { ... } }
+	// 2. Code blocks: ```json { ... } ``` or ``` { ... } ``` or arrays [ { ... } ]
 	if len(calls) == 0 {
-		rawObjRegex := regexp.MustCompile(`(?s)\{\s*"(?:name|tool)"\s*:\s*"([a-zA-Z0-9_]+)"\s*,\s*"(?:arguments|parameters|input)"\s*:\s*(\{.*?\})\s*\}`)
+		codeBlockRegex := regexp.MustCompile("(?s)```(?:json)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```")
+		matches := codeBlockRegex.FindAllStringSubmatch(content, -1)
+		for i, m := range matches {
+			if len(m) > 1 {
+				jsonStr := strings.TrimSpace(m[1])
+				if strings.HasPrefix(jsonStr, "[") {
+					var arr []json.RawMessage
+					if err := json.Unmarshal([]byte(jsonStr), &arr); err == nil {
+						for j, item := range arr {
+							if tc, ok := a.parseSingleToolCall(string(item), fmt.Sprintf("call_arr_%d_%d", i+1, j+1)); ok {
+								calls = append(calls, tc)
+							}
+						}
+					}
+				} else {
+					if tc, ok := a.parseSingleToolCall(jsonStr, fmt.Sprintf("call_block_%d", i+1)); ok {
+						calls = append(calls, tc)
+					}
+				}
+			}
+		}
+	}
+
+	// 3. Standalone raw JSON objects
+	if len(calls) == 0 {
+		rawObjRegex := regexp.MustCompile(`(?s)\{\s*"(?:name|tool|function)"\s*:\s*"([a-zA-Z0-9_]+)"\s*,\s*"(?:arguments|parameters|input)"\s*:\s*(\{.*?\})\s*\}`)
 		rawMatches := rawObjRegex.FindAllStringSubmatch(content, -1)
 		for i, rm := range rawMatches {
 			if len(rm) > 2 {
@@ -663,7 +737,161 @@ func (a *Agent) extractToolCallsFromContent(content string) ([]llm.ToolCall, str
 		}
 	}
 
+	// 4. Function call syntax: tool_name(param="val") or tool_name({"param": "val"})
+	if len(calls) == 0 {
+		fnSyntaxRegex := regexp.MustCompile(`\b([a-zA-Z0-9_]+)\s*\(\s*(\{.*?\}|[^)]*)\s*\)`)
+		fnMatches := fnSyntaxRegex.FindAllStringSubmatch(content, -1)
+		for i, fnm := range fnMatches {
+			if len(fnm) > 2 {
+				toolName := fnm[1]
+				paramStr := strings.TrimSpace(fnm[2])
+				if _, exists := a.registry.Get(toolName); exists {
+					var rawArgs json.RawMessage
+					if strings.HasPrefix(paramStr, "{") && strings.HasSuffix(paramStr, "}") {
+						rawArgs = json.RawMessage(paramStr)
+					} else if paramStr != "" {
+						kvMap := make(map[string]any)
+						kvRegex := regexp.MustCompile(`([a-zA-Z0-9_]+)\s*=\s*("[^"]*"|'[^']*'|[^,\s]+)`)
+						kvMatches := kvRegex.FindAllStringSubmatch(paramStr, -1)
+						for _, kv := range kvMatches {
+							if len(kv) > 2 {
+								k := kv[1]
+								v := strings.Trim(kv[2], `"'`)
+								if v == "true" {
+									kvMap[k] = true
+								} else if v == "false" {
+									kvMap[k] = false
+								} else {
+									kvMap[k] = v
+								}
+							}
+						}
+						if len(kvMap) > 0 {
+							rawArgs, _ = json.Marshal(kvMap)
+						} else {
+							cleanVal := strings.Trim(paramStr, `"'`)
+							rawArgs, _ = json.Marshal(map[string]any{"app_name": cleanVal, "command": cleanVal})
+						}
+					} else {
+						rawArgs = json.RawMessage("{}")
+					}
+
+					calls = append(calls, llm.ToolCall{
+						ID:   fmt.Sprintf("call_fn_%d", i+1),
+						Type: "function",
+						Function: llm.FunctionCall{
+							Name:      toolName,
+							Arguments: rawArgs,
+						},
+					})
+				}
+			}
+		}
+	}
+
 	return calls, content
+}
+
+// detectActionIntent identifies explicit user intent for direct tool execution if the model returned plain text.
+func (a *Agent) detectActionIntent(prompt, content string) *llm.ToolCall {
+	promptTrimmed := strings.TrimSpace(prompt)
+	if promptTrimmed == "" {
+		return nil
+	}
+
+	lowerPrompt := strings.ToLower(promptTrimmed)
+
+	// Strip common conversational prefixes: "can you ", "please ", "now ", "hey bob, ", "bob, "
+	cleanPrompt := lowerPrompt
+	prefixes := []string{"hey bob,", "hey bob", "bob,", "bob", "please", "can you", "could you", "would you", "now", "just", "go ahead and"}
+	changed := true
+	for changed {
+		changed = false
+		for _, p := range prefixes {
+			if strings.HasPrefix(cleanPrompt, p+" ") {
+				cleanPrompt = strings.TrimSpace(strings.TrimPrefix(cleanPrompt, p))
+				changed = true
+			}
+		}
+	}
+
+	// 1. Close application intent: "close whatsapp", "exit whatsapp", "quit whatsapp", "kill whatsapp"
+	closeRegex := regexp.MustCompile(`^(?:close|exit|quit|terminate|kill|shut\s+down)\s+(?:the\s+app(?:lication)?\s+|the\s+)?([a-zA-Z0-9_\-\.\s]+)$`)
+	if match := closeRegex.FindStringSubmatch(cleanPrompt); len(match) > 1 {
+		rawAppName := strings.TrimSpace(match[1])
+		rawAppName = strings.TrimSuffix(rawAppName, " app")
+		rawAppName = strings.TrimSuffix(rawAppName, " application")
+		rawAppName = strings.TrimSuffix(rawAppName, " for me")
+		rawAppName = strings.TrimSuffix(rawAppName, " please")
+		rawAppName = strings.Trim(rawAppName, ".!?;:'\"")
+		rawAppName = strings.TrimSpace(rawAppName)
+
+		if rawAppName != "" {
+			args, _ := json.Marshal(map[string]any{"app_name": rawAppName})
+			return &llm.ToolCall{
+				ID:   "call_intent_close_app",
+				Type: "function",
+				Function: llm.FunctionCall{
+					Name:      "close_app",
+					Arguments: args,
+				},
+			}
+		}
+	}
+
+	// 2. Open application intent: "open whatsapp", "launch whatsapp", "start whatsapp", "run whatsapp"
+	openRegex := regexp.MustCompile(`^(?:open|launch|start|run)\s+(?:the\s+app(?:lication)?\s+|the\s+)?([a-zA-Z0-9_\-\.\s]+)$`)
+	if match := openRegex.FindStringSubmatch(cleanPrompt); len(match) > 1 {
+		rawAppName := strings.TrimSpace(match[1])
+		rawAppName = strings.TrimSuffix(rawAppName, " app")
+		rawAppName = strings.TrimSuffix(rawAppName, " application")
+		rawAppName = strings.TrimSuffix(rawAppName, " for me")
+		rawAppName = strings.TrimSuffix(rawAppName, " please")
+		rawAppName = strings.Trim(rawAppName, ".!?;:'\"")
+		rawAppName = strings.TrimSpace(rawAppName)
+
+		if rawAppName != "" {
+			args, _ := json.Marshal(map[string]any{"app_name": rawAppName})
+			return &llm.ToolCall{
+				ID:   "call_intent_open_app",
+				Type: "function",
+				Function: llm.FunctionCall{
+					Name:      "open_app",
+					Arguments: args,
+				},
+			}
+		}
+	}
+
+	// 3. List running apps intent: "what apps are running", "list running apps", "show running apps", "running apps"
+	listRunningRegex := regexp.MustCompile(`(?i)\b(?:what\s+apps\s+are\s+running|list\s+running\s+apps|show\s+running\s+apps|running\s+apps|running\s+applications|what\s+is\s+running)\b`)
+	if listRunningRegex.MatchString(cleanPrompt) {
+		args, _ := json.Marshal(map[string]any{"gui_only": true})
+		return &llm.ToolCall{
+			ID:   "call_intent_list_running_apps",
+			Type: "function",
+			Function: llm.FunctionCall{
+				Name:      "list_running_apps",
+				Arguments: args,
+			},
+		}
+	}
+
+	// 4. Take screenshot intent: "take screenshot", "take a screenshot", "capture screen"
+	screenshotRegex := regexp.MustCompile(`(?i)\b(?:take\s+(?:a\s+)?screenshot|capture\s+(?:the\s+)?screen)\b`)
+	if screenshotRegex.MatchString(cleanPrompt) {
+		args, _ := json.Marshal(map[string]any{"label": "User requested screenshot"})
+		return &llm.ToolCall{
+			ID:   "call_intent_take_screenshot",
+			Type: "function",
+			Function: llm.FunctionCall{
+				Name:      "take_screenshot",
+				Arguments: args,
+			},
+		}
+	}
+
+	return nil
 }
 
 func (a *Agent) parseSingleToolCall(jsonStr string, id string) (llm.ToolCall, bool) {
@@ -717,6 +945,17 @@ func (a *Agent) finishTask(task *Task, status TaskStatus, result string, errMsg 
 	task.Error = errMsg
 	task.UpdatedAt = time.Now()
 	a.mu.Unlock()
+
+	if status != StatusCompleted && task.SessionID != "" {
+		finalMsg := errMsg
+		if finalMsg == "" {
+			finalMsg = fmt.Sprintf("Task ended with status %s", status)
+		}
+		a.sessionManager.AppendMessage(task.SessionID, llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: fmt.Sprintf("[%s]: %s", status, finalMsg),
+		})
+	}
 
 	action := audit.ActionTaskComplete
 	if status == StatusFailed {

@@ -162,3 +162,37 @@ func TestCloseAppTool_InputValidation(t *testing.T) {
 	}
 }
 
+func TestFindAppPath(t *testing.T) {
+	// Finder and Calculator are standard macOS apps
+	finderPath := FindAppPath("Finder")
+	if finderPath == "" {
+		// Finder is at /System/Library/CoreServices/Finder.app or similar
+		t.Logf("Finder not found in standard /Applications, which is normal on some macOS versions")
+	}
+
+	// Non-existent app should return empty string
+	fakePath := FindAppPath("DefinitelyNonExistentApp12345")
+	if fakePath != "" {
+		t.Errorf("expected empty string for non-existent app, got %q", fakePath)
+	}
+}
+
+func TestCloseAppTool_NotRunning(t *testing.T) {
+	tool := NewCloseAppTool()
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"app_name": "NonExistentApp1234567890"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Success {
+		t.Errorf("expected success for close check")
+	}
+	data, ok := res.Data.(CloseAppResult)
+	if !ok {
+		t.Fatalf("expected CloseAppResult, got %T", res.Data)
+	}
+	if !data.AlreadyClosed {
+		t.Errorf("expected AlreadyClosed to be true")
+	}
+}
+
+

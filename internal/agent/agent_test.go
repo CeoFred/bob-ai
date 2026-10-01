@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ func setupTestAgent(t *testing.T, mockResponses ...llm.ChatResponse) (*agent.Age
 
 	_ = reg.Register(terminal.NewTerminalTool(policy, pathVal, tempDir, 5*time.Second, 1024*1024))
 	_ = reg.Register(filesystem.NewWriteFileTool(pathVal))
+	_ = reg.Register(filesystem.NewReplaceFileContentTool(pathVal))
 	_ = reg.Register(filesystem.NewReadFileTool(pathVal, 1024*1024))
 	_ = reg.Register(apps.NewListRunningAppsTool())
 	_ = reg.Register(apps.NewListInstalledAppsTool())
@@ -464,13 +466,197 @@ func TestAgent_CloseApp_ApprovalFlow(t *testing.T) {
 		t.Fatalf("failed to approve tool: %v", err)
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	for i := 0; i < 20; i++ {
+		time.Sleep(50 * time.Millisecond)
+		tObj, _ = ag.GetTask(task.ID)
+		if tObj.Status == agent.StatusCompleted {
+			break
+		}
+	}
 
-	tObj, _ = ag.GetTask(task.ID)
 	if tObj.Status != agent.StatusCompleted {
 		t.Fatalf("expected task completed after approval, got %v (error: %s)", tObj.Status, tObj.Error)
 	}
 }
+
+func TestAgent_ReplaceFileContentFlow(t *testing.T) {
+	tempDir := t.TempDir()
+	filePath := tempDir + "/app.js"
+	_ = os.WriteFile(filePath, []byte("const port = 3000;\nconsole.log(port);"), 0644)
+
+	repArgs, _ := json.Marshal(map[string]any{
+		"path":                filePath,
+		"target_content":      "3000",
+		"replacement_content": "8080",
+	})
+
+	step1 := llm.ChatResponse{
+		Message: llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "call_rep",
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      "replace_file_content",
+						Arguments: repArgs,
+					},
+				},
+			},
+		},
+	}
+
+	step2 := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "Updated port to 8080 successfully.",
+		},
+		FinishReason: "stop",
+	}
+
+	ag, _, _, _ := setupTestAgent(t, step1, step2)
+	sess := ag.SessionManager().Create(sessions.SessionTypeProject, tempDir, "AppProject")
+	task := ag.CreateTask(sess.ID, "Change port to 8080 in app.js")
+
+	ag.Run(context.Background(), task)
+	time.Sleep(150 * time.Millisecond)
+
+	tObj, ok := ag.GetTask(task.ID)
+	if !ok || tObj.Status != agent.StatusCompleted {
+		t.Fatalf("expected task completed, got %+v", tObj)
+	}
+
+	contentBytes, _ := os.ReadFile(filePath)
+	if !strings.Contains(string(contentBytes), "const port = 8080;") {
+		t.Errorf("expected updated content in file, got: %s", string(contentBytes))
+	}
+}
+
+func TestAgent_MultiTurnConversationContext(t *testing.T) {
+	// Turn 1 response
+	turn1Resp := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "I'm Bob, ready to help you, Creator.",
+		},
+		FinishReason: "stop",
+	}
+
+	// Turn 2 response
+	turn2Resp := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "Understood, continuing the previous discussion.",
+		},
+		FinishReason: "stop",
+	}
+
+	ag, _, _, _ := setupTestAgent(t, turn1Resp, turn2Resp)
+	sess := ag.SessionManager().Create(sessions.SessionTypeConversation, "", "Chat Thread")
+
+	// 1. Run Turn 1
+	task1 := ag.CreateTask(sess.ID, "Hello Bob, who are you?")
+	ag.Run(context.Background(), task1)
+	time.Sleep(100 * time.Millisecond)
+
+	tObj1, ok := ag.GetTask(task1.ID)
+	if !ok || tObj1.Status != agent.StatusCompleted {
+		t.Fatalf("turn 1 failed: status=%v", tObj1.Status)
+	}
+
+	// Verify session history has Turn 1 user and assistant messages
+	updatedSess, _ := ag.SessionManager().Get(sess.ID)
+	if len(updatedSess.Messages) != 2 {
+		t.Fatalf("expected 2 messages in session history after turn 1, got %d", len(updatedSess.Messages))
+	}
+	if updatedSess.Messages[0].Role != llm.RoleUser || updatedSess.Messages[1].Role != llm.RoleAssistant {
+		t.Errorf("unexpected message roles in history: %+v", updatedSess.Messages)
+	}
+
+	// 2. Run Turn 2
+	task2 := ag.CreateTask(sess.ID, "Can you follow up on that?")
+	ag.Run(context.Background(), task2)
+	time.Sleep(100 * time.Millisecond)
+
+	tObj2, ok := ag.GetTask(task2.ID)
+	if !ok || tObj2.Status != agent.StatusCompleted {
+		t.Fatalf("turn 2 failed: status=%v", tObj2.Status)
+	}
+
+	// Verify session history now contains both turns (4 messages)
+	updatedSess2, _ := ag.SessionManager().Get(sess.ID)
+	if len(updatedSess2.Messages) != 4 {
+		t.Fatalf("expected 4 messages in session history after turn 2, got %d", len(updatedSess2.Messages))
+	}
+	if updatedSess2.Messages[2].Content != "Can you follow up on that?" {
+		t.Errorf("expected turn 2 prompt in history, got: %s", updatedSess2.Messages[2].Content)
+	}
+	if updatedSess2.Messages[3].Content != "Understood, continuing the previous discussion." {
+		t.Errorf("expected turn 2 assistant reply in history, got: %s", updatedSess2.Messages[3].Content)
+	}
+}
+
+func TestAgent_EnforceActionIntent_CloseApp(t *testing.T) {
+	// Step 1: LLM hallucinates/responds with plain text claiming app is closed without calling tool
+	step1 := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "WhatsApp has been successfully closed.",
+		},
+		FinishReason: "stop",
+	}
+
+	// Step 2: After the agent enforces the close_app tool call, LLM receives the real tool result
+	step2 := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "WhatsApp is not running, codemon.",
+		},
+		FinishReason: "stop",
+	}
+
+	ag, _, _, _ := setupTestAgent(t, step1, step2)
+	task := ag.CreateTask("", "Now close WhatsApp")
+
+	ag.Run(context.Background(), task)
+
+	// close_app may pause for human approval if required by security policy
+	time.Sleep(100 * time.Millisecond)
+
+	tObj, ok := ag.GetTask(task.ID)
+	if !ok {
+		t.Fatalf("task not found")
+	}
+
+	if tObj.Status == agent.StatusWaitingForApproval {
+		_ = ag.ApproveTool(task.ID, true)
+	}
+
+	for i := 0; i < 20; i++ {
+		time.Sleep(50 * time.Millisecond)
+		tObj, _ = ag.GetTask(task.ID)
+		if tObj.Status == agent.StatusCompleted {
+			break
+		}
+	}
+
+	if tObj.Status != agent.StatusCompleted {
+		t.Fatalf("expected task completed, got %v (error: %s)", tObj.Status, tObj.Error)
+	}
+
+	// Verify that close_app was indeed executed in the events
+	foundCloseTool := false
+	for _, ev := range tObj.Events {
+		if ev.Type == agent.EventToolStarted && ev.Tool == "close_app" {
+			foundCloseTool = true
+		}
+	}
+
+	if !foundCloseTool {
+		t.Errorf("expected close_app tool execution event to be generated via action intent enforcement")
+	}
+}
+
 
 
 

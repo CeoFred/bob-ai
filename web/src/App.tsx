@@ -21,7 +21,7 @@ import {
   approveTask,
 } from './services/api';
 import { wsClient } from './services/websocket';
-import { getSessionIdFromUrl, navigateToChat } from './lib/router';
+import { getSessionIdFromUrl, navigateToChat, navigateToNewChat } from './lib/router';
 
 export const App: React.FC = () => {
   const [status, setStatus] = useState<SystemStatus | null>(null);
@@ -181,13 +181,13 @@ export const App: React.FC = () => {
   };
 
   const selectSession = async (sessionId: string, updateUrl: boolean = true) => {
-    setActiveSessionId(sessionId);
-    if (updateUrl) {
-      navigateToChat(sessionId);
-    }
-
     try {
       const detail = await fetchSession(sessionId);
+      setActiveSessionId(sessionId);
+      if (updateUrl) {
+        navigateToChat(sessionId);
+      }
+
       const reconstructedEvents: AgentEvent[] = [];
       let latestRunningTask: Task | null = null;
 
@@ -271,9 +271,12 @@ export const App: React.FC = () => {
       setEvents(reconstructedEvents);
       setCurrentTask(latestRunningTask);
     } catch (e) {
-      console.error('Failed to load session details:', e);
+      console.warn(`Chat session "${sessionId}" was not found or failed to load. Redirecting to home:`, e);
+      setActiveSessionId('');
       setEvents([]);
       setCurrentTask(null);
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      navigateToNewChat(true);
     }
   };
 
@@ -448,7 +451,7 @@ export const App: React.FC = () => {
           selectSession(remaining[0].id);
         } else {
           setActiveSessionId('');
-          navigateToChat('');
+          navigateToNewChat(true);
           setEvents([]);
           setCurrentTask(null);
         }
@@ -470,7 +473,7 @@ export const App: React.FC = () => {
           selectSession(remaining[0].id);
         } else {
           setActiveSessionId('');
-          navigateToChat('');
+          navigateToNewChat(true);
           setEvents([]);
           setCurrentTask(null);
         }
@@ -522,6 +525,7 @@ export const App: React.FC = () => {
             events={events}
             session={activeSession}
             project={activeProject}
+            user={status?.user}
             onSend={handleSendPrompt}
             onCancel={handleCancelTask}
             onApprove={handleApprove}

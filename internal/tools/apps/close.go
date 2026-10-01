@@ -33,7 +33,7 @@ func (t *CloseAppTool) Name() string {
 }
 
 func (t *CloseAppTool) Description() string {
-	return "Closes or quits a running application on macOS. Performs a graceful quit by default via macOS application scripting, or force terminates if requested. Automatically verifies that the process has exited."
+	return "Closes or quits a running application on macOS. Gracefully quits via AppleScript and SIGTERM by default, or force-kills (SIGKILL) if requested. Automatically verifies that the process has completely terminated."
 }
 
 func (t *CloseAppTool) InputSchema() any {
@@ -42,7 +42,7 @@ func (t *CloseAppTool) InputSchema() any {
 		"properties": map[string]any{
 			"app_name": map[string]any{
 				"type":        "string",
-				"description": "Name of the running application to close (e.g. 'Slack', 'Brave Browser', 'Visual Studio Code', 'WhatsApp', 'Spotify').",
+				"description": "Name of the running application to close (e.g. 'WhatsApp', 'Slack', 'Brave Browser', 'Visual Studio Code', 'Spotify').",
 			},
 			"force": map[string]any{
 				"type":        "boolean",
@@ -55,7 +55,7 @@ func (t *CloseAppTool) InputSchema() any {
 			},
 			"bundle_id": map[string]any{
 				"type":        "string",
-				"description": "Optional bundle identifier of the application (e.g. 'com.tinyspeck.slackmacgap').",
+				"description": "Optional bundle identifier of the application (e.g. 'net.whatsapp.WhatsApp', 'com.tinyspeck.slackmacgap').",
 			},
 		},
 		"required": []string{"app_name"},
@@ -63,13 +63,15 @@ func (t *CloseAppTool) InputSchema() any {
 }
 
 type CloseAppResult struct {
-	AppName   string `json:"app_name"`
-	PID       int    `json:"pid,omitempty"`
-	Force     bool   `json:"force"`
-	Timestamp string `json:"timestamp"`
-	Closed    bool   `json:"closed"`
-	Verified  bool   `json:"verified"`
-	Method    string `json:"method"`
+	AppName        string `json:"app_name"`
+	PID            int    `json:"pid,omitempty"`
+	TerminatedPIDs []int  `json:"terminated_pids,omitempty"`
+	Force          bool   `json:"force"`
+	Timestamp      string `json:"timestamp"`
+	Closed         bool   `json:"closed"`
+	AlreadyClosed  bool   `json:"already_closed,omitempty"`
+	Verified       bool   `json:"verified"`
+	Method         string `json:"method"`
 }
 
 func (t *CloseAppTool) Execute(ctx context.Context, rawInput json.RawMessage) (registry.ToolResult, error) {
@@ -93,105 +95,128 @@ func (t *CloseAppTool) Execute(ctx context.Context, rawInput json.RawMessage) (r
 		}, fmt.Errorf("missing app identification")
 	}
 
-	method := "graceful"
-	var closeErr error
+	displayApp := appName
+	if displayApp == "" {
+		if bundleID != "" {
+			displayApp = bundleID
+		} else {
+			displayApp = fmt.Sprintf("PID %d", pid)
+		}
+	}
 
-	if pid > 0 && force {
-		// Force kill by PID
-		cmd := exec.CommandContext(ctx, "/bin/kill", "-9", strconv.Itoa(pid))
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			closeErr = fmt.Errorf("kill -9 pid %d failed: %s (%v)", pid, string(out), err)
+	// 1. Discover all target PIDs
+	var targetPIDs []int
+	if pid > 0 {
+		targetPIDs = append(targetPIDs, pid)
+	} else {
+		procs := FindAppProcesses(ctx, appName, bundleID)
+		for _, p := range procs {
+			targetPIDs = append(targetPIDs, p.PID)
 		}
-		method = "sigkill_pid"
-	} else if pid > 0 && !force {
-		// Graceful signal by PID
-		cmd := exec.CommandContext(ctx, "/bin/kill", "-15", strconv.Itoa(pid))
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			closeErr = fmt.Errorf("kill -15 pid %d failed: %s (%v)", pid, string(out), err)
+	}
+
+	// Check if already not running
+	if len(targetPIDs) == 0 {
+		running, foundPID := CheckAppRunning(ctx, appName, bundleID, pid)
+		if !running {
+			return registry.ToolResult{
+				Success: true,
+				Output:  fmt.Sprintf("Application %q is not currently running.", displayApp),
+				Data: CloseAppResult{
+					AppName:       displayApp,
+					Force:         force,
+					Timestamp:     time.Now().Format(time.RFC3339),
+					Closed:        false,
+					AlreadyClosed: true,
+					Verified:      true,
+					Method:        "noop_already_closed",
+				},
+			}, nil
 		}
-		method = "sigterm_pid"
-	} else if !force {
-		// Method 1: Graceful AppleScript quit
+		if foundPID > 0 {
+			targetPIDs = append(targetPIDs, foundPID)
+		}
+	}
+
+	primaryPID := 0
+	if len(targetPIDs) > 0 {
+		primaryPID = targetPIDs[0]
+	}
+
+	method := "graceful"
+
+	if force {
+		// FORCE QUIT (SIGKILL)
+		method = "sigkill"
+		for _, p := range targetPIDs {
+			_ = exec.CommandContext(ctx, "/bin/kill", "-9", strconv.Itoa(p)).Run()
+		}
+		if appName != "" {
+			_ = exec.CommandContext(ctx, "/usr/bin/pkill", "-9", "-f", "-i", appName).Run()
+			_ = exec.CommandContext(ctx, "/usr/bin/killall", "-9", appName).Run()
+		}
+	} else {
+		// GRACEFUL QUIT: Multi-tiered (AppleScript + SIGTERM fallback)
+		method = "applescript_quit"
+
+		// Step 1: Send AppleScript quit command
 		script := ""
 		if bundleID != "" {
 			script = fmt.Sprintf(`tell application id "%s" to quit`, bundleID)
 		} else {
 			script = fmt.Sprintf(`tell application "%s" to quit`, appName)
 		}
+		_ = exec.CommandContext(ctx, "/usr/bin/osascript", "-e", script).Run()
 
-		cmd := exec.CommandContext(ctx, "/usr/bin/osascript", "-e", script)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			// Fallback: try pkill if AppleScript failed
-			pkillCmd := exec.CommandContext(ctx, "/usr/bin/pkill", "-x", appName)
-			pkillOut, pkillErr := pkillCmd.CombinedOutput()
-			if pkillErr != nil {
-				// Try case-insensitive pkill
-				pkillF := exec.CommandContext(ctx, "/usr/bin/pkill", "-f", "-i", appName)
-				if fOut, fErr := pkillF.CombinedOutput(); fErr != nil {
-					closeErr = fmt.Errorf("could not close app %q (osascript: %s, pkill: %s, %s)", appName, string(out), string(pkillOut), string(fOut))
-				} else {
-					method = "pkill_fallback"
-				}
-			} else {
-				method = "pkill_graceful"
+		// Allow brief moment for app to respond to AppleEvent
+		time.Sleep(300 * time.Millisecond)
+
+		// Step 2: Check if app exited or is still running
+		stillRunning, _ := CheckAppRunning(ctx, appName, bundleID, primaryPID)
+		if stillRunning {
+			// Step 3: Send graceful SIGTERM to all matched PIDs
+			method = "sigterm"
+			for _, p := range targetPIDs {
+				_ = exec.CommandContext(ctx, "/bin/kill", "-15", strconv.Itoa(p)).Run()
 			}
-		} else {
-			method = "applescript_quit"
-		}
-	} else {
-		// Force kill by app name
-		killallCmd := exec.CommandContext(ctx, "/usr/bin/killall", "-9", appName)
-		out, err := killallCmd.CombinedOutput()
-		if err != nil {
-			pkillCmd := exec.CommandContext(ctx, "/usr/bin/pkill", "-9", "-f", "-i", appName)
-			pkillOut, pkillErr := pkillCmd.CombinedOutput()
-			if pkillErr != nil {
-				closeErr = fmt.Errorf("force kill failed for %q: %s (%s)", appName, string(out), string(pkillOut))
-			} else {
-				method = "pkill_sigkill"
+			if appName != "" {
+				_ = exec.CommandContext(ctx, "/usr/bin/pkill", "-15", "-f", "-i", appName).Run()
 			}
-		} else {
-			method = "killall_sigkill"
 		}
 	}
 
-	if closeErr != nil {
-		return registry.ToolResult{
-			Success: false,
-			Error:   fmt.Sprintf("Failed to close application %q: %v", appName, closeErr),
-		}, closeErr
-	}
-
-	displayApp := appName
-	if displayApp == "" {
-		displayApp = fmt.Sprintf("PID %d", pid)
-	}
-
-	// Post-close Verification: Check if app has indeed exited (up to 2 seconds)
-	verifiedClosed, _ := WaitForAppState(ctx, appName, bundleID, pid, false, 2*time.Second)
+	// Post-close Verification: Wait up to 2 seconds for all processes to exit
+	verifiedClosed, remainingPID := WaitForAppState(ctx, appName, bundleID, primaryPID, false, 2*time.Second)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Application %q close command executed (%s).", displayApp, method))
 	if verifiedClosed {
-		sb.WriteString(" [Verified: Process has exited and is no longer running]")
+		if len(targetPIDs) > 1 {
+			sb.WriteString(fmt.Sprintf("Application %q (PIDs: %v) was successfully closed (%s). [Verified: All processes have exited]", displayApp, targetPIDs, method))
+		} else if primaryPID > 0 {
+			sb.WriteString(fmt.Sprintf("Application %q (PID %d) was successfully closed (%s). [Verified: Process has exited and is no longer running]", displayApp, primaryPID, method))
+		} else {
+			sb.WriteString(fmt.Sprintf("Application %q was successfully closed (%s). [Verified: Process has exited and is no longer running]", displayApp, method))
+		}
 	} else {
-		sb.WriteString(" [Notice: Process was still detected after 2s. The app may be waiting on an unsaved prompt or require force=true].")
+		if remainingPID > 0 {
+			sb.WriteString(fmt.Sprintf("Notice: Application %q (PID %d) was sent close signal (%s), but is STILL running. The application may have unsaved changes or require a force quit. Call close_app with force: true to terminate immediately.", displayApp, remainingPID, method))
+		} else {
+			sb.WriteString(fmt.Sprintf("Notice: Application %q was sent close signal (%s), but process is STILL detected running. Call close_app with force: true to force terminate immediately.", displayApp, method))
+		}
 	}
 
 	return registry.ToolResult{
 		Success: true,
 		Output:  sb.String(),
 		Data: CloseAppResult{
-			AppName:   displayApp,
-			PID:       pid,
-			Force:     force,
-			Timestamp: time.Now().Format(time.RFC3339),
-			Closed:    true,
-			Verified:  verifiedClosed,
-			Method:    method,
+			AppName:        displayApp,
+			PID:            primaryPID,
+			TerminatedPIDs: targetPIDs,
+			Force:          force,
+			Timestamp:      time.Now().Format(time.RFC3339),
+			Closed:         verifiedClosed,
+			Verified:       verifiedClosed,
+			Method:         method,
 		},
 	}, nil
 }

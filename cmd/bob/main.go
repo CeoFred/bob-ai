@@ -86,6 +86,7 @@ func main() {
 
 	_ = toolReg.Register(filesystem.NewReadFileTool(pathValidator, cfg.Filesystem.MaxFileSizeRead))
 	_ = toolReg.Register(filesystem.NewWriteFileTool(pathValidator))
+	_ = toolReg.Register(filesystem.NewReplaceFileContentTool(pathValidator))
 	_ = toolReg.Register(filesystem.NewListDirectoryTool(pathValidator))
 	_ = toolReg.Register(filesystem.NewSearchFilesTool(pathValidator))
 	_ = toolReg.Register(filesystem.NewFindProjectTool(pathValidator))

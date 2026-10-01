@@ -112,9 +112,6 @@ export const Header: React.FC<HeaderProps> = ({
                   <div className="flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-0.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs truncate max-w-[120px] xs:max-w-[170px] sm:max-w-[320px]">
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
                     <span className="truncate">{activeSession.title || 'Conversation'}</span>
-                    <span className="text-[10px] text-zinc-500 hidden md:inline">
-                      (Read-Only)
-                    </span>
                   </div>
                 )}
 
