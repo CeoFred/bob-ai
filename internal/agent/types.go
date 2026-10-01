@@ -76,4 +76,7 @@ type AgentConfig struct {
 	MaxSteps       int
 	MaxToolCalls   int
 	TimeoutSeconds int
+	UserName       string
+	UserAlias      string
+	UserTitle      string
 }

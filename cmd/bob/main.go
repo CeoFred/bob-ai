@@ -20,6 +20,7 @@ import (
 	"bob/internal/security"
 	"bob/internal/server"
 	"bob/internal/sessions"
+	"bob/internal/tools/apps"
 	"bob/internal/tools/filesystem"
 	"bob/internal/tools/registry"
 	"bob/internal/tools/screenshot"
@@ -88,6 +89,10 @@ func main() {
 	_ = toolReg.Register(filesystem.NewListDirectoryTool(pathValidator))
 	_ = toolReg.Register(filesystem.NewSearchFilesTool(pathValidator))
 	_ = toolReg.Register(filesystem.NewFindProjectTool(pathValidator))
+	_ = toolReg.Register(apps.NewListRunningAppsTool())
+	_ = toolReg.Register(apps.NewListInstalledAppsTool())
+	_ = toolReg.Register(apps.NewOpenAppTool())
+	_ = toolReg.Register(apps.NewCloseAppTool())
 	_ = toolReg.Register(screenshot.NewScreenshotTool(cfg.Storage.ScreenshotsDir))
 
 	// 6. Initialize Computer Abstraction
@@ -120,6 +125,9 @@ func main() {
 			MaxSteps:       cfg.Agent.MaxSteps,
 			MaxToolCalls:   cfg.Agent.MaxToolCalls,
 			TimeoutSeconds: cfg.Agent.TimeoutSeconds,
+			UserName:       cfg.User.Name,
+			UserAlias:      cfg.User.Alias,
+			UserTitle:      cfg.User.Title,
 		},
 	)
 

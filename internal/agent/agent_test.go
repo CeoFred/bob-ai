@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"bob/internal/llm"
 	"bob/internal/security"
 	"bob/internal/sessions"
+	"bob/internal/tools/apps"
 	"bob/internal/tools/filesystem"
 	"bob/internal/tools/registry"
 	"bob/internal/tools/terminal"
@@ -27,6 +29,10 @@ func setupTestAgent(t *testing.T, mockResponses ...llm.ChatResponse) (*agent.Age
 	_ = reg.Register(terminal.NewTerminalTool(policy, pathVal, tempDir, 5*time.Second, 1024*1024))
 	_ = reg.Register(filesystem.NewWriteFileTool(pathVal))
 	_ = reg.Register(filesystem.NewReadFileTool(pathVal, 1024*1024))
+	_ = reg.Register(apps.NewListRunningAppsTool())
+	_ = reg.Register(apps.NewListInstalledAppsTool())
+	_ = reg.Register(apps.NewOpenAppTool())
+	_ = reg.Register(apps.NewCloseAppTool())
 
 	redactor := security.NewRedactor()
 	auditLog, _ := audit.NewLogger(tempDir+"/audit.jsonl", redactor)
@@ -236,7 +242,7 @@ func TestAgent_Approval_ApproveAndReject(t *testing.T) {
 
 	var foundRejectEvent bool
 	for _, ev := range tObj.Events {
-		if ev.Type == agent.EventToolCompleted && ev.Error == "User rejected command execution" {
+		if ev.Type == agent.EventToolCompleted && strings.Contains(strings.ToLower(ev.Error), "rejected") {
 			foundRejectEvent = true
 		}
 	}
@@ -269,7 +275,7 @@ func TestAgent_Approval_ApproveAndReject(t *testing.T) {
 }
 
 func TestAgent_ConversationMode_BlocksMutatingCommands(t *testing.T) {
-	toolCallArgs, _ := json.Marshal(map[string]any{"command": "rm file.txt"})
+	toolCallArgs, _ := json.Marshal(map[string]any{"command": "rm -rf /"})
 	step1 := llm.ChatResponse{
 		Message: llm.Message{
 			Role: llm.RoleAssistant,
@@ -288,14 +294,14 @@ func TestAgent_ConversationMode_BlocksMutatingCommands(t *testing.T) {
 	step2 := llm.ChatResponse{
 		Message: llm.Message{
 			Role:    llm.RoleAssistant,
-			Content: "I cannot delete files in conversation mode.",
+			Content: "Dangerous command is blocked.",
 		},
 		FinishReason: "stop",
 	}
 
 	ag, _, _, _ := setupTestAgent(t, step1, step2)
 	sess := ag.SessionManager().Create(sessions.SessionTypeConversation, "", "General Chat")
-	task := ag.CreateTask(sess.ID, "Delete file")
+	task := ag.CreateTask(sess.ID, "Delete root")
 
 	ag.Run(context.Background(), task)
 
@@ -351,4 +357,120 @@ func TestAgent_MarkdownToolCallExtraction(t *testing.T) {
 		t.Errorf("got %q, want %q", tObj.Result, "The current directory is verified.")
 	}
 }
+
+func TestAgent_ListRunningAppsExecution(t *testing.T) {
+	// Step 1: Agent requests list_running_apps
+	toolArgs, _ := json.Marshal(map[string]any{"gui_only": true})
+	step1 := llm.ChatResponse{
+		Message: llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "call_apps_1",
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      "list_running_apps",
+						Arguments: toolArgs,
+					},
+				},
+			},
+		},
+	}
+
+	// Step 2: Agent reports running apps to creator
+	step2 := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "codemon, here are the applications currently active on your Mac: Google Chrome, Visual Studio Code, and Ghostty.",
+		},
+		FinishReason: "stop",
+	}
+
+	ag, _, _, _ := setupTestAgent(t, step1, step2)
+	task := ag.CreateTask("", "What applications are currently open?")
+
+	ag.Run(context.Background(), task)
+
+	time.Sleep(200 * time.Millisecond)
+
+	tObj, ok := ag.GetTask(task.ID)
+	if !ok || tObj.Status != agent.StatusCompleted {
+		t.Fatalf("expected task completed, got %v (error: %s)", tObj.Status, tObj.Error)
+	}
+
+	foundTool := false
+	for _, ev := range tObj.Events {
+		if ev.Type == agent.EventToolStarted && ev.Tool == "list_running_apps" {
+			foundTool = true
+		}
+	}
+
+	if !foundTool {
+		t.Errorf("expected list_running_apps event to be recorded")
+	}
+
+	if !strings.Contains(tObj.Result, "codemon") {
+		t.Errorf("expected result addressing codemon, got %q", tObj.Result)
+	}
+}
+
+func TestAgent_CloseApp_ApprovalFlow(t *testing.T) {
+	// Step 1: Agent attempts to close Slack
+	toolArgs, _ := json.Marshal(map[string]any{"app_name": "Slack"})
+	step1 := llm.ChatResponse{
+		Message: llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "call_close_slack",
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      "close_app",
+						Arguments: toolArgs,
+					},
+				},
+			},
+		},
+	}
+
+	step2 := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "Slack has been closed, codemon.",
+		},
+		FinishReason: "stop",
+	}
+
+	ag, _, _, _ := setupTestAgent(t, step1, step2)
+	task := ag.CreateTask("", "Can you close slack?")
+
+	ag.Run(context.Background(), task)
+
+	// Wait for task to pause in waiting_for_approval
+	time.Sleep(100 * time.Millisecond)
+
+	tObj, ok := ag.GetTask(task.ID)
+	if !ok || tObj.Status != agent.StatusWaitingForApproval {
+		t.Fatalf("expected task waiting for approval, got %v", tObj.Status)
+	}
+
+	if tObj.PendingApproval == nil || tObj.PendingApproval.ToolName != "close_app" {
+		t.Fatalf("expected pending approval for close_app, got %+v", tObj.PendingApproval)
+	}
+
+	// Approve close_app
+	err := ag.ApproveTool(task.ID, true)
+	if err != nil {
+		t.Fatalf("failed to approve tool: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	tObj, _ = ag.GetTask(task.ID)
+	if tObj.Status != agent.StatusCompleted {
+		t.Fatalf("expected task completed after approval, got %v (error: %s)", tObj.Status, tObj.Error)
+	}
+}
+
+
 

@@ -41,27 +41,48 @@ func (p *CommandPolicy) EvaluateCommandWithContext(ctx context.Context, commandS
 	if sc, ok := SessionFromContext(ctx); ok && (sc.Type == "conversation" || sc.ReadOnly) {
 		lowerCmd := strings.ToLower(cmd)
 
-		// Check for mutating commands or redirection in conversation mode
+		// Check explicit blocked commands and catastrophic patterns first
+		for _, blocked := range p.BlockedCommands {
+			blocked = strings.TrimSpace(strings.ToLower(blocked))
+			if blocked != "" && (lowerCmd == blocked || strings.HasPrefix(lowerCmd, blocked+" ") || strings.Contains(lowerCmd, blocked)) {
+				return PolicyBlocked, "Command matches blocked security policy rule: " + blocked
+			}
+		}
+		for _, dp := range dangerousPatterns {
+			if strings.Contains(lowerCmd, dp) {
+				return PolicyBlocked, "Dangerous system destruction pattern detected"
+			}
+		}
+
+		// State-changing commands in conversation mode require human approval
 		mutatingPrefixes := []string{
 			"rm", "mv", "cp", "touch", "mkdir", "rmdir", "chmod", "chown", "chgrp",
-			"sed -i", "truncate", "dd", "mkfs", "nano", "vim", "vi", "emacs",
+			"sed -i", "truncate", "dd", "nano", "vim", "vi", "emacs",
 			"git commit", "git push", "git checkout -b", "git branch -d", "git reset",
 			"git revert", "git merge", "git rebase", "git clean", "git stash pop",
 			"npm install", "npm i", "npm uninstall", "yarn add", "yarn remove", "pnpm add",
 			"pip install", "pip uninstall", "brew install", "brew uninstall",
-			"go install", "kill", "pkill", "killall", "shutdown", "reboot",
+			"go install", "kill", "pkill", "killall",
 		}
 		for _, mp := range mutatingPrefixes {
 			if lowerCmd == mp || strings.HasPrefix(lowerCmd, mp+" ") || containsPipeOrSubcommand(lowerCmd, mp) {
-				return PolicyBlocked, fmt.Sprintf("Command %q blocked: file modifications and mutating actions are not permitted in General Conversation mode. Open or create a Project to run mutating commands.", mp)
+				return PolicyApprovalRequired, fmt.Sprintf("Command %q modifies system state and requires explicit approval", mp)
 			}
 		}
 		if strings.Contains(lowerCmd, " >") || strings.Contains(lowerCmd, " >>") || strings.HasPrefix(lowerCmd, ">") || strings.HasPrefix(lowerCmd, ">>") {
-			return PolicyBlocked, "Output redirection/writing to files is blocked in General Conversation mode"
+			return PolicyApprovalRequired, "Command redirects output/modifies files and requires explicit approval"
 		}
 	}
 
 	return p.EvaluateCommand(commandStr)
+}
+
+var dangerousPatterns = []string{
+	"rm -rf /", "rm -rf ~", "rm -rf /*",
+	":(){ :|:& };:",
+	"> /dev/sda", "> /dev/disk",
+	"mkfs", "dd if=/dev",
+	"shutdown", "halt",
 }
 
 // EvaluateCommand inspects a shell command and returns its security classification.
@@ -82,12 +103,6 @@ func (p *CommandPolicy) EvaluateCommand(commandStr string) (PolicyLevel, string)
 	}
 
 	// 2. Additional hardcoded dangerous patterns
-	dangerousPatterns := []string{
-		"rm -rf /", "rm -rf ~", "rm -rf /*",
-		":(){ :|:& };:",
-		"> /dev/sda", "> /dev/disk",
-		"mkfs", "dd if=/dev",
-	}
 	for _, dp := range dangerousPatterns {
 		if strings.Contains(lowerCmd, dp) {
 			return PolicyBlocked, "Dangerous system destruction pattern detected"

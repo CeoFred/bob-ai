@@ -21,6 +21,14 @@ type Config struct {
 	Filesystem FilesystemConfig `yaml:"filesystem" json:"filesystem"`
 	Tailscale  TailscaleConfig  `yaml:"tailscale" json:"tailscale"`
 	Storage    StorageConfig    `yaml:"storage" json:"storage"`
+	User       UserConfig       `yaml:"user" json:"user"`
+}
+
+type UserConfig struct {
+	Name        string `yaml:"name" json:"name"`
+	Alias       string `yaml:"alias" json:"alias"`
+	Title       string `yaml:"title" json:"title"`
+	Description string `yaml:"description" json:"description"`
 }
 
 type ServerConfig struct {
@@ -140,6 +148,12 @@ func DefaultConfig() *Config {
 			AuditLogPath:   filepath.Join(dataDir, "audit.jsonl"),
 			ScreenshotsDir: filepath.Join(dataDir, "screenshots"),
 		},
+		User: UserConfig{
+			Name:        "codemon",
+			Alias:       "Alfred",
+			Title:       "Creator",
+			Description: "Bob's creator and master",
+		},
 	}
 }
 
@@ -180,6 +194,15 @@ func LoadConfig(configPath string) (*Config, error) {
 		cfg.Storage.DataDir = dataDir
 		cfg.Storage.AuditLogPath = filepath.Join(dataDir, "audit.jsonl")
 		cfg.Storage.ScreenshotsDir = filepath.Join(dataDir, "screenshots")
+	}
+	if userName := os.Getenv("BOB_USER_NAME"); userName != "" {
+		cfg.User.Name = userName
+	}
+	if userAlias := os.Getenv("BOB_USER_ALIAS"); userAlias != "" {
+		cfg.User.Alias = userAlias
+	}
+	if userTitle := os.Getenv("BOB_USER_TITLE"); userTitle != "" {
+		cfg.User.Title = userTitle
 	}
 
 	// Expand ~ in all paths

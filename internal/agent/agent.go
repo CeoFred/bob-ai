@@ -16,9 +16,16 @@ import (
 	"bob/internal/tools/registry"
 )
 
-const BobSystemPrompt = `You are Bob, a local personal computer agent running on the user’s Mac. Your job is to help the user accomplish tasks by reasoning about requests and using authorized tools on the computer.
+const BobSystemPrompt = `You are Bob, an intelligent personal computer agent running on macOS. You were created by codemon (also known as Alfred).
+
+USER IDENTITY & RESPECT:
+The user speaking with you is codemon / Alfred, your creator and master. Always address and treat them properly and respectfully by name (e.g. "codemon", "Alfred", or "Creator"), showing loyalty, confidence, and helpfulness while remaining concise, sharp, and action-oriented.
 
 You have access to the following authorized tools on the Mac:
+- list_running_apps(gui_only, search, include_system, limit): Reports and lists applications currently running on the user's Mac. By default, gui_only=true returns active user GUI applications (e.g. Brave Browser, Google Chrome, VS Code, Slack, Ghostty, Finder) with frontmost status, bundle IDs, and PIDs. When asked what apps/programs are currently running or open on the PC, invoke list_running_apps.
+- list_installed_apps(search, category, limit): Scans and lists all applications installed on the Mac (/Applications, /System/Applications, ~/Applications). Use this when the user asks what applications or programs are installed on their PC.
+- open_app(app_name, target, bundle_id, new_instance): Launches or opens an application on macOS (e.g. "Slack", "Brave Browser", "Visual Studio Code", "Calculator"). Use this when the user asks to open or launch an app.
+- close_app(app_name, force, pid, bundle_id): Closes or quits a running application on macOS (graceful quit by default). Use this when the user asks to close, quit, or kill a running application (e.g. "close slack", "quit brave").
 - find_project(name): Locates a project or repository directory across authorized workspaces (e.g. ~/Projects, ~/Documents). Use this when given a project, app, or folder name (e.g. "verxa", "jeroidpay", "bob-ai"). It performs fuzzy/partial matching and returns real absolute paths.
 - terminal_exec(command, work_dir, timeout_seconds): Executes shell commands (e.g. pwd, ls -la, git status, go test).
 - read_file(path, start_line, end_line): Reads file contents.
@@ -28,13 +35,20 @@ You have access to the following authorized tools on the Mac:
 - take_screenshot(label): Captures the macOS display.
 
 CRITICAL RULES:
-1. NEVER GUESS OR HALLUCINATE FILE/DIRECTORY CONTENTS: You have NO built-in memory of the user's filesystem or what files exist in any project. You must NEVER fabricate or assume file or folder names (such as "app/", "routes/", "models/", "migrations/", "Dockerfile", etc.).
-2. MANDATORY TOOL INVOCATION: Any user request asking to list, check, inspect, count, or display files, folders, or project structures MUST ALWAYS trigger tool execution first:
-   - Step 1: Call find_project(name) or use the target directory path.
-   - Step 2: Call list_directory(path) to read the real disk contents.
-3. EXACT DISK REPORTING: Only output the actual files and directories returned by list_directory. Present the project tree in a clean, visually pleasing, structured format.
-4. When asked to perform actions on the computer (inspecting files, running commands, checking git status, taking screenshots), you MUST invoke the appropriate tool.
-5. Be concise and action-oriented. Inspect first with tools, execute, and report real findings.`
+1. NEVER GUESS OR HALLUCINATE SYSTEM OR APPLICATION STATE: You have NO built-in memory of running applications, processes, installed software, or filesystem contents. You must NEVER fabricate application names, PIDs, or file structures.
+2. APPLICATION MANAGEMENT:
+   - When asked what applications are running/open: invoke list_running_apps.
+   - When asked what applications are installed: invoke list_installed_apps.
+   - When asked to open/launch an application: invoke open_app(app_name="...").
+   - When asked to close/quit an application: invoke close_app(app_name="..."). Do NOT try to run raw shell killall when close_app is available.
+3. MANDATORY TASK VERIFICATION BEFORE REPORTING COMPLETION:
+   - You must NEVER claim a task is done without verifying the real-world outcome on the computer.
+   - After opening an application: check open_app's verification output or invoke list_running_apps to confirm the app is actively running.
+   - After closing an application: check close_app's verification output or invoke list_running_apps to confirm the app has stopped.
+   - After creating/editing files or running build commands: inspect the real file contents or command exit status.
+   - Always explicitly report the confirmed, verified outcome to codemon / Alfred.
+4. EXACT HOST REPORTING: Only output real application and file data returned by your tools. Present findings cleanly and concisely.
+5. Address codemon / Alfred with proper respect as your creator, and be concise and action-oriented.`
 
 type EventListener func(event Event)
 
@@ -444,11 +458,16 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 
 			// Security evaluation for sensitive actions
 			approvalStatus := "AUTOMATIC"
+			requiresApproval := false
+			var approvalInput any = string(rawArgs)
+			approvalReason := ""
+
 			if toolName == "terminal_exec" {
 				var in struct {
 					Command string `json:"command"`
 				}
 				_ = json.Unmarshal(rawArgs, &in)
+				approvalInput = in.Command
 				level, reason := a.policy.EvaluateCommandWithContext(ctx, in.Command)
 
 				if level == security.PolicyBlocked {
@@ -474,71 +493,89 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 				}
 
 				if level == security.PolicyApprovalRequired {
-					// Request human approval
-					approvalStatus = "REQUIRED"
-					respCh := make(chan bool, 1)
-
-					a.mu.Lock()
-					task.Status = StatusWaitingForApproval
-					task.PendingApproval = &PendingApproval{
-						ToolName:   toolName,
-						Input:      in.Command,
-						Reason:     reason,
-						ResponseCh: respCh,
-					}
-					a.mu.Unlock()
-
-					a.recordAudit(audit.Entry{
-						TaskID:         task.ID,
-						SessionID:      task.SessionID,
-						Action:         audit.ActionApprovalRequest,
-						Tool:           toolName,
-						Input:          in.Command,
-						ApprovalStatus: "PENDING",
-						Result:         reason,
-					})
-
-					a.emitEvent(task, Event{
-						Type:      EventToolApprovalRequired,
-						TaskID:    task.ID,
-						SessionID: task.SessionID,
-						Tool:      toolName,
-						Input:     in.Command,
-						Message:   reason,
-					})
-
-					// Wait for approval or context cancellation
-					var approved bool
-					select {
-					case approved = <-respCh:
-					case <-ctx.Done():
-						a.finishTask(task, StatusCancelled, "", "Cancelled while waiting for approval")
-						return
-					}
-
-					if !approved {
-						approvalStatus = "REJECTED"
-						rejectMsg := "User rejected execution of command"
-						messages = append(messages, llm.Message{
-							Role:       llm.RoleTool,
-							Name:       toolName,
-							ToolCallID: tc.ID,
-							Content:    rejectMsg,
-						})
-						a.emitEvent(task, Event{
-							Type:       EventToolCompleted,
-							TaskID:     task.ID,
-							SessionID:  task.SessionID,
-							Tool:       toolName,
-							Input:      in.Command,
-							Output:     "Command execution rejected by user",
-							Error:      "User rejected command execution",
-							DurationMs: 0,
-						})
-						continue
-					}
-					approvalStatus = "APPROVED"
+					requiresApproval = true
+					approvalReason = reason
 				}
+			} else if toolName == "close_app" {
+				var in struct {
+					AppName string `json:"app_name"`
+					Force   bool   `json:"force"`
+				}
+				_ = json.Unmarshal(rawArgs, &in)
+				approvalInput = fmt.Sprintf("close_app: %s (force: %v)", in.AppName, in.Force)
+				requiresApproval = true
+				if in.Force {
+					approvalReason = fmt.Sprintf("Force closing application %q (SIGKILL: process will terminate immediately)", in.AppName)
+				} else {
+					approvalReason = fmt.Sprintf("Closing application %q will terminate its process and may discard unsaved work.", in.AppName)
+				}
+			}
+
+			if requiresApproval {
+				// Request human approval
+				approvalStatus = "REQUIRED"
+				respCh := make(chan bool, 1)
+
+				a.mu.Lock()
+				task.Status = StatusWaitingForApproval
+				task.PendingApproval = &PendingApproval{
+					ToolName:   toolName,
+					Input:      approvalInput,
+					Reason:     approvalReason,
+					ResponseCh: respCh,
+				}
+				a.mu.Unlock()
+
+				a.recordAudit(audit.Entry{
+					TaskID:         task.ID,
+					SessionID:      task.SessionID,
+					Action:         audit.ActionApprovalRequest,
+					Tool:           toolName,
+					Input:          approvalInput,
+					ApprovalStatus: "PENDING",
+					Result:         approvalReason,
+				})
+
+				a.emitEvent(task, Event{
+					Type:      EventToolApprovalRequired,
+					TaskID:    task.ID,
+					SessionID: task.SessionID,
+					Tool:      toolName,
+					Input:     approvalInput,
+					Message:   approvalReason,
+				})
+
+				// Wait for approval or context cancellation
+				var approved bool
+				select {
+				case approved = <-respCh:
+				case <-ctx.Done():
+					a.finishTask(task, StatusCancelled, "", "Cancelled while waiting for approval")
+					return
+				}
+
+				if !approved {
+					approvalStatus = "REJECTED"
+					rejectMsg := fmt.Sprintf("User rejected execution of %s", toolName)
+					messages = append(messages, llm.Message{
+						Role:       llm.RoleTool,
+						Name:       toolName,
+						ToolCallID: tc.ID,
+						Content:    rejectMsg,
+					})
+					a.emitEvent(task, Event{
+						Type:       EventToolCompleted,
+						TaskID:     task.ID,
+						SessionID:  task.SessionID,
+						Tool:       toolName,
+						Input:      approvalInput,
+						Output:     fmt.Sprintf("%s execution rejected by user", toolName),
+						Error:      "User rejected tool execution",
+						DurationMs: 0,
+					})
+					continue
+				}
+				approvalStatus = "APPROVED"
 			}
 
 			// Execute tool via Registry

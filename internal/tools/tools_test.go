@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"bob/internal/security"
+	"bob/internal/tools/apps"
 	"bob/internal/tools/filesystem"
 	"bob/internal/tools/registry"
 	"bob/internal/tools/screenshot"
@@ -252,4 +253,22 @@ func TestFindProjectTool(t *testing.T) {
 		t.Fatalf("expected matches, got %v", res.Data)
 	}
 }
+
+func TestAppTools_Registration(t *testing.T) {
+	reg := registry.NewRegistry()
+
+	_ = reg.Register(apps.NewListRunningAppsTool())
+	_ = reg.Register(apps.NewListInstalledAppsTool())
+	_ = reg.Register(apps.NewOpenAppTool())
+	_ = reg.Register(apps.NewCloseAppTool())
+
+	expectedTools := []string{"list_running_apps", "list_installed_apps", "open_app", "close_app"}
+	for _, expected := range expectedTools {
+		tool, ok := reg.Get(expected)
+		if !ok || tool == nil {
+			t.Errorf("expected tool %q to be registered", expected)
+		}
+	}
+}
+
 

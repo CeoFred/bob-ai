@@ -77,3 +77,10 @@ storage:
   data_dir: "~/.bob"
   audit_log_path: "~/.bob/audit.jsonl"
   screenshots_dir: "~/.bob/screenshots"
+
+user:
+  name: "codemon"
+  alias: "Alfred"
+  title: "Creator"
+  description: "Bob's creator and master"
+
