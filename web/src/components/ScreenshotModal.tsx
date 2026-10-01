@@ -1,5 +1,7 @@
 import React from 'react';
-import { X, Download, ExternalLink } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
+import { Button } from './ui/button';
+import { Download, ExternalLink, Camera } from 'lucide-react';
 
 interface ScreenshotModalProps {
   url: string;
@@ -8,40 +10,38 @@ interface ScreenshotModalProps {
 
 export const ScreenshotModal: React.FC<ScreenshotModalProps> = ({ url, onClose }) => {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fadeIn">
-      <div className="relative max-w-5xl w-full bg-[#161b22] border border-[#30363d] rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-[#30363d] bg-[#0d1117]">
-          <h3 className="text-sm font-semibold text-white">Mac Screen Capture</h3>
+    <Dialog open={true} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent onClose={onClose} className="max-w-4xl p-5">
+        <DialogHeader className="flex flex-row items-center justify-between pb-3 pr-8 space-y-0">
           <div className="flex items-center gap-2">
-            <a
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-              className="p-1.5 rounded-lg hover:bg-[#30363d] text-gray-400 hover:text-white transition-colors"
-              title="Open in new tab"
-            >
-              <ExternalLink className="w-4 h-4" />
-            </a>
-            <a
-              href={url}
-              download
-              className="p-1.5 rounded-lg hover:bg-[#30363d] text-gray-400 hover:text-white transition-colors"
-              title="Download image"
-            >
-              <Download className="w-4 h-4" />
-            </a>
-            <button
-              onClick={onClose}
-              className="p-1.5 rounded-lg hover:bg-rose-900/30 text-gray-400 hover:text-rose-300 transition-colors"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <Camera className="w-4 h-4 text-zinc-400" />
+            <DialogTitle>Screen Capture</DialogTitle>
           </div>
+
+          <div className="flex items-center gap-2">
+            <a href={url} target="_blank" rel="noreferrer">
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-zinc-400 gap-1.5">
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Open in tab</span>
+              </Button>
+            </a>
+            <a href={url} download>
+              <Button variant="secondary" size="sm" className="h-7 px-2 text-xs gap-1.5">
+                <Download className="w-3.5 h-3.5" />
+                <span>Download</span>
+              </Button>
+            </a>
+          </div>
+        </DialogHeader>
+
+        <div className="flex-1 overflow-auto p-2 flex items-center justify-center bg-zinc-950 rounded-xl border border-zinc-900 mt-2 max-h-[70vh]">
+          <img
+            src={url}
+            alt="Screenshot"
+            className="max-h-[65vh] w-auto object-contain rounded-lg shadow-md"
+          />
         </div>
-        <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-[#05070a]">
-          <img src={url} alt="Screenshot" className="max-h-[75vh] w-auto object-contain rounded-lg border border-[#30363d]" />
-        </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 };

@@ -201,7 +201,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, rawInput json.RawMessage) (
 	}, nil
 }
 
-// ListDirectoryTool enumerates directory contents.
+// ListDirectoryTool enumerates directory contents and builds a visually pleasing tree.
 type ListDirectoryTool struct {
 	validator *security.PathValidator
 }
@@ -215,7 +215,7 @@ func (t *ListDirectoryTool) Name() string {
 }
 
 func (t *ListDirectoryTool) Description() string {
-	return "Lists files and subdirectories within an authorized directory path."
+	return "Lists directory contents and builds a visually pleasing, complete project directory tree. By default, recursively lists all files and directories including hidden files (dotfiles) without omitting any files, unless explicitly specified otherwise."
 }
 
 func (t *ListDirectoryTool) InputSchema() any {
@@ -226,20 +226,68 @@ func (t *ListDirectoryTool) InputSchema() any {
 				"type":        "string",
 				"description": "Path to directory to list.",
 			},
+			"recursive": map[string]any{
+				"type":        "boolean",
+				"description": "Whether to recursively list all subdirectories and files in a visual tree (default: true).",
+			},
+			"include_hidden": map[string]any{
+				"type":        "boolean",
+				"description": "Whether to include hidden files and directories (dotfiles like .gitignore, .env, .github). Default is true unless explicitly set to false.",
+			},
+			"max_depth": map[string]any{
+				"type":        "integer",
+				"description": "Optional maximum recursion depth (0 or omitted = full depth).",
+			},
 		},
 		"required": []string{"path"},
 	}
 }
 
 type ListDirectoryInput struct {
-	Path string `json:"path"`
+	Path          string `json:"path"`
+	Recursive     *bool  `json:"recursive,omitempty"`
+	IncludeHidden *bool  `json:"include_hidden,omitempty"`
+	MaxDepth      int    `json:"max_depth,omitempty"`
 }
 
 type FileEntry struct {
-	Name    string `json:"name"`
-	IsDir   bool   `json:"is_dir"`
-	Size    int64  `json:"size"`
-	ModTime string `json:"mod_time"`
+	Name          string       `json:"name"`
+	Path          string       `json:"path"`
+	RelativePath  string       `json:"relative_path"`
+	IsDir         bool         `json:"is_dir"`
+	IsHidden      bool         `json:"is_hidden"`
+	Size          int64        `json:"size"`
+	SizeFormatted string       `json:"size_formatted"`
+	ModTime       string       `json:"mod_time"`
+	Children      []*FileEntry `json:"children,omitempty"`
+}
+
+type DirectoryListingResult struct {
+	RootPath           string       `json:"root_path"`
+	TotalFiles         int          `json:"total_files"`
+	TotalDirectories   int          `json:"total_directories"`
+	TotalSizeBytes     int64        `json:"total_size_bytes"`
+	TotalSizeFormatted string       `json:"total_size_formatted"`
+	Entries            []*FileEntry `json:"entries"`
+}
+
+// FormatFileSize returns a human-readable file size string.
+func FormatFileSize(bytes int64) string {
+	if bytes < 1024 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	units := []string{"KB", "MB", "GB", "TB"}
+	val := float64(bytes)
+	for _, u := range units {
+		val /= 1024.0
+		if val < 1024.0 || u == "TB" {
+			if val < 10.0 {
+				return fmt.Sprintf("%.1f %s", val, u)
+			}
+			return fmt.Sprintf("%.0f %s", val, u)
+		}
+	}
+	return fmt.Sprintf("%d B", bytes)
 }
 
 func (t *ListDirectoryTool) Execute(ctx context.Context, rawInput json.RawMessage) (registry.ToolResult, error) {
@@ -253,17 +301,108 @@ func (t *ListDirectoryTool) Execute(ctx context.Context, rawInput json.RawMessag
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
 
-	entries, err := os.ReadDir(validPath)
+	isRecursive := true
+	if in.Recursive != nil {
+		isRecursive = *in.Recursive
+	}
+
+	includeHidden := true
+	if in.IncludeHidden != nil {
+		includeHidden = *in.IncludeHidden
+	}
+
+	maxDepth := in.MaxDepth
+	if maxDepth <= 0 {
+		maxDepth = 50 // Safe recursion depth limit
+	}
+
+	var totalFiles int
+	var totalDirs int
+	var totalSize int64
+	visited := make(map[string]bool)
+
+	entries, err := buildDirectoryTree(
+		validPath,
+		validPath,
+		1,
+		maxDepth,
+		isRecursive,
+		includeHidden,
+		&totalFiles,
+		&totalDirs,
+		&totalSize,
+		visited,
+	)
 	if err != nil {
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
 
-	var results []FileEntry
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Directory listing for %s (%d items):\n", validPath, len(entries)))
+	sb.WriteString(fmt.Sprintf("📁 %s (%d files, %d directories • %s)\n", validPath, totalFiles, totalDirs, FormatFileSize(totalSize)))
 
-	for _, entry := range entries {
-		info, err := entry.Info()
+	if len(entries) == 0 {
+		sb.WriteString("└── (empty directory)\n")
+	} else {
+		renderTree(entries, "", &sb)
+	}
+
+	resultData := DirectoryListingResult{
+		RootPath:           validPath,
+		TotalFiles:         totalFiles,
+		TotalDirectories:   totalDirs,
+		TotalSizeBytes:     totalSize,
+		TotalSizeFormatted: FormatFileSize(totalSize),
+		Entries:            entries,
+	}
+
+	return registry.ToolResult{
+		Success: true,
+		Output:  sb.String(),
+		Data:    resultData,
+	}, nil
+}
+
+func buildDirectoryTree(
+	rootPath string,
+	currentDir string,
+	currentDepth int,
+	maxDepth int,
+	recursive bool,
+	includeHidden bool,
+	totalFiles *int,
+	totalDirs *int,
+	totalSize *int64,
+	visited map[string]bool,
+) ([]*FileEntry, error) {
+	realPath, err := filepath.EvalSymlinks(currentDir)
+	if err != nil {
+		realPath = currentDir
+	}
+	if visited[realPath] {
+		return nil, nil
+	}
+	visited[realPath] = true
+
+	dirEntries, err := os.ReadDir(currentDir)
+	if err != nil {
+		return nil, err
+	}
+
+	var dirNodes []*FileEntry
+	var fileNodes []*FileEntry
+
+	for _, de := range dirEntries {
+		name := de.Name()
+		isHidden := strings.HasPrefix(name, ".")
+
+		if !includeHidden && isHidden {
+			continue
+		}
+
+		fullPath := filepath.Join(currentDir, name)
+		relPath, _ := filepath.Rel(rootPath, fullPath)
+		info, err := de.Info()
+
 		size := int64(0)
 		modTime := ""
 		if err == nil {
@@ -271,26 +410,81 @@ func (t *ListDirectoryTool) Execute(ctx context.Context, rawInput json.RawMessag
 			modTime = info.ModTime().Format(time.RFC3339)
 		}
 
-		fe := FileEntry{
-			Name:    entry.Name(),
-			IsDir:   entry.IsDir(),
-			Size:    size,
-			ModTime: modTime,
+		node := &FileEntry{
+			Name:          name,
+			Path:          fullPath,
+			RelativePath:  relPath,
+			IsDir:         de.IsDir(),
+			IsHidden:      isHidden,
+			Size:          size,
+			SizeFormatted: FormatFileSize(size),
+			ModTime:       modTime,
 		}
-		results = append(results, fe)
 
-		typeMarker := "FILE"
-		if entry.IsDir() {
-			typeMarker = "DIR "
+		if de.IsDir() {
+			*totalDirs++
+			if recursive && currentDepth < maxDepth {
+				subChildren, err := buildDirectoryTree(
+					rootPath,
+					fullPath,
+					currentDepth+1,
+					maxDepth,
+					recursive,
+					includeHidden,
+					totalFiles,
+					totalDirs,
+					totalSize,
+					visited,
+				)
+				if err == nil {
+					node.Children = subChildren
+				}
+			}
+			dirNodes = append(dirNodes, node)
+		} else {
+			*totalFiles++
+			*totalSize += size
+			fileNodes = append(fileNodes, node)
 		}
-		sb.WriteString(fmt.Sprintf("[%s] %-30s %10d bytes  %s\n", typeMarker, entry.Name(), size, modTime))
 	}
 
-	return registry.ToolResult{
-		Success: true,
-		Output:  sb.String(),
-		Data:    results,
-	}, nil
+	// Sort directories first (case-insensitive), then files (case-insensitive)
+	sortEntries(dirNodes)
+	sortEntries(fileNodes)
+
+	allEntries := append(dirNodes, fileNodes...)
+	return allEntries, nil
+}
+
+func sortEntries(entries []*FileEntry) {
+	for i := 0; i < len(entries)-1; i++ {
+		for j := i + 1; j < len(entries); j++ {
+			if strings.ToLower(entries[i].Name) > strings.ToLower(entries[j].Name) {
+				entries[i], entries[j] = entries[j], entries[i]
+			}
+		}
+	}
+}
+
+func renderTree(entries []*FileEntry, prefix string, sb *strings.Builder) {
+	for i, entry := range entries {
+		isLast := (i == len(entries)-1)
+		connector := "├── "
+		childPrefix := prefix + "│   "
+		if isLast {
+			connector = "└── "
+			childPrefix = prefix + "    "
+		}
+
+		if entry.IsDir {
+			sb.WriteString(fmt.Sprintf("%s%s📁 %s/\n", prefix, connector, entry.Name))
+			if len(entry.Children) > 0 {
+				renderTree(entry.Children, childPrefix, sb)
+			}
+		} else {
+			sb.WriteString(fmt.Sprintf("%s%s📄 %s (%s)\n", prefix, connector, entry.Name, entry.SizeFormatted))
+		}
+	}
 }
 
 // SearchFilesTool finds files matching a name or content query.
@@ -307,7 +501,7 @@ func (t *SearchFilesTool) Name() string {
 }
 
 func (t *SearchFilesTool) Description() string {
-	return "Searches files within an authorized directory matching a name pattern or text content query."
+	return "Searches files within an authorized directory matching a name pattern or text content query. Includes hidden files by default."
 }
 
 func (t *SearchFilesTool) InputSchema() any {
@@ -320,11 +514,19 @@ func (t *SearchFilesTool) InputSchema() any {
 			},
 			"name_pattern": map[string]any{
 				"type":        "string",
-				"description": "Filename pattern to match (e.g. '*.go', 'test_*.py').",
+				"description": "Filename pattern to match (e.g. '*.go', 'test_*.py', '.env*').",
 			},
 			"text_query": map[string]any{
 				"type":        "string",
 				"description": "Text substring to search for inside files.",
+			},
+			"include_hidden": map[string]any{
+				"type":        "boolean",
+				"description": "Whether to search hidden files and directories (default: true).",
+			},
+			"max_results": map[string]any{
+				"type":        "integer",
+				"description": "Maximum number of search matches to return (default: 1000).",
 			},
 		},
 		"required": []string{"directory"},
@@ -332,9 +534,11 @@ func (t *SearchFilesTool) InputSchema() any {
 }
 
 type SearchFilesInput struct {
-	Directory   string `json:"directory"`
-	NamePattern string `json:"name_pattern,omitempty"`
-	TextQuery   string `json:"text_query,omitempty"`
+	Directory     string `json:"directory"`
+	NamePattern   string `json:"name_pattern,omitempty"`
+	TextQuery     string `json:"text_query,omitempty"`
+	IncludeHidden *bool  `json:"include_hidden,omitempty"`
+	MaxResults    int    `json:"max_results,omitempty"`
 }
 
 func (t *SearchFilesTool) Execute(ctx context.Context, rawInput json.RawMessage) (registry.ToolResult, error) {
@@ -348,15 +552,29 @@ func (t *SearchFilesTool) Execute(ctx context.Context, rawInput json.RawMessage)
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
 
+	includeHidden := true
+	if in.IncludeHidden != nil {
+		includeHidden = *in.IncludeHidden
+	}
+
+	maxResults := in.MaxResults
+	if maxResults <= 0 {
+		maxResults = 1000
+	}
+
 	var matches []string
 	err = filepath.WalkDir(validDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
+			if !includeHidden && strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+
+		if !includeHidden && strings.HasPrefix(d.Name(), ".") {
 			return nil
 		}
 
@@ -376,8 +594,8 @@ func (t *SearchFilesTool) Execute(ctx context.Context, rawInput json.RawMessage)
 
 		rel, _ := filepath.Rel(validDir, path)
 		matches = append(matches, rel)
-		if len(matches) >= 100 {
-			return io.EOF // Stop at 100 matches
+		if len(matches) >= maxResults {
+			return io.EOF // Stop at maxResults
 		}
 		return nil
 	})
@@ -387,7 +605,7 @@ func (t *SearchFilesTool) Execute(ctx context.Context, rawInput json.RawMessage)
 	}
 
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("Found %d matching files in %s:\n", len(matches), validDir))
+	sb.WriteString(fmt.Sprintf("Found %d matching file(s) in %s:\n", len(matches), validDir))
 	for _, m := range matches {
 		sb.WriteString(fmt.Sprintf("- %s\n", m))
 	}

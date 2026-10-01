@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Task, AgentEvent } from '../types';
 import { ToolActivity } from './ToolActivity';
 import { ApprovalBanner } from './ApprovalBanner';
-import { Send, Square, Bot, User, Sparkles, Terminal, Camera, FolderSearch, Loader2 } from 'lucide-react';
+import { Button } from './ui/button';
+import { ArrowUp, Square, Sparkles, Terminal, Camera, FolderSearch, Loader2, Bot } from 'lucide-react';
 
 interface ChatViewProps {
   currentTask: Task | null;
@@ -23,6 +24,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 }) => {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isRunning =
     currentTask !== null &&
@@ -38,145 +40,177 @@ export const ChatView: React.FC<ChatViewProps> = ({
     scrollToBottom();
   }, [events, currentTask]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  // Auto-resize textarea height
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+    }
+  }, [input]);
+
+  const handleSend = () => {
     const trimmed = input.trim();
     if (!trimmed || isRunning) return;
     onSend(trimmed);
     setInput('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
   };
 
-  const handleQuickPrompt = (prompt: string) => {
-    if (isRunning) return;
-    onSend(prompt);
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 18) return 'Good afternoon';
+    return 'Good evening';
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#0d1117] text-gray-200">
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
+    <div className="flex-1 flex flex-col h-full bg-[#09090b] text-zinc-200 overflow-hidden relative">
+      {/* Main chat or landing area */}
+      <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6">
         {events.length === 0 && !currentTask ? (
-          <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto py-12 space-y-6">
-            <div className="p-4 rounded-2xl bg-[#161b22] border border-[#30363d] shadow-xl">
-              <Bot className="w-10 h-10 text-blue-400" />
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-xl font-bold text-white">Hey, I'm Bob</h2>
-              <p className="text-sm text-gray-400 leading-relaxed">
-                Your local AI personal computer agent running on this Mac. I reason about tasks and execute terminal commands,
-                filesystem operations, and screen captures securely with real-time audit logging.
+          /* Claude-style Landing View */
+          <div className="h-full flex flex-col items-center justify-center max-w-2xl mx-auto space-y-8 animate-fadeIn">
+            <div className="text-center space-y-2">
+              <h1 className="text-3xl font-medium tracking-tight text-zinc-100">
+                {getGreeting()}
+              </h1>
+              <p className="text-sm text-zinc-500">
+                How can Bob help you on your Mac today?
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 w-full pt-4">
-              <button
-                onClick={() => handleQuickPrompt('Tell me what directory Bob is running from, list the files there, and take a screenshot')}
-                className="p-3 rounded-xl bg-[#161b22] hover:bg-[#21262d] border border-[#30363d] text-left transition-all group"
-              >
-                <div className="flex items-center gap-2 text-xs font-semibold text-blue-400 group-hover:text-blue-300">
-                  <Sparkles className="w-3.5 h-3.5" /> Acceptance Test
-                </div>
-                <div className="text-[11px] text-gray-400 mt-1 line-clamp-2">
-                  "Tell me what directory Bob is running from, list files, and take screenshot."
-                </div>
-              </button>
+            {/* Central Claude-style prompt input */}
+            <div className="w-full">
+              <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/60 focus-within:border-zinc-700/90 focus-within:bg-zinc-900 shadow-xl transition-all p-3">
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Ask Bob to run tasks, check files, or execute commands..."
+                  rows={2}
+                  className="w-full bg-transparent text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none px-2 py-1 leading-relaxed max-h-48"
+                />
 
-              <button
-                onClick={() => handleQuickPrompt('Run git status and check the repository status')}
-                className="p-3 rounded-xl bg-[#161b22] hover:bg-[#21262d] border border-[#30363d] text-left transition-all group"
-              >
-                <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400 group-hover:text-emerald-300">
-                  <Terminal className="w-3.5 h-3.5" /> Git Status
-                </div>
-                <div className="text-[11px] text-gray-400 mt-1">
-                  Inspect working tree and active branches.
-                </div>
-              </button>
+                <div className="flex items-center justify-between pt-2 px-1 border-t border-zinc-850/60 mt-1">
+                  <span className="text-[11px] text-zinc-600 font-sans">
+                    Press Enter to send, Shift+Enter for new line
+                  </span>
 
-              <button
-                onClick={() => handleQuickPrompt('Take a screenshot of the Mac desktop')}
-                className="p-3 rounded-xl bg-[#161b22] hover:bg-[#21262d] border border-[#30363d] text-left transition-all group"
-              >
-                <div className="flex items-center gap-2 text-xs font-semibold text-purple-400 group-hover:text-purple-300">
-                  <Camera className="w-3.5 h-3.5" /> Screen Capture
+                  <Button
+                    size="icon"
+                    onClick={handleSend}
+                    disabled={!input.trim()}
+                    className="h-8 w-8 rounded-xl bg-zinc-100 hover:bg-white text-zinc-900 disabled:opacity-30 transition-all"
+                  >
+                    <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                  </Button>
                 </div>
-                <div className="text-[11px] text-gray-400 mt-1">
-                  Capture macOS desktop display.
-                </div>
-              </button>
+              </div>
 
-              <button
-                onClick={() => handleQuickPrompt('List all files in the current workspace directory')}
-                className="p-3 rounded-xl bg-[#161b22] hover:bg-[#21262d] border border-[#30363d] text-left transition-all group"
-              >
-                <div className="flex items-center gap-2 text-xs font-semibold text-amber-400 group-hover:text-amber-300">
-                  <FolderSearch className="w-3.5 h-3.5" /> List Workspace
-                </div>
-                <div className="text-[11px] text-gray-400 mt-1">
-                  Inspect project folders and structure.
-                </div>
-              </button>
+              {/* Quick suggestion pills */}
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-4">
+                <button
+                  onClick={() => onSend('Run git status and check the repository status')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                >
+                  <Terminal className="w-3.5 h-3.5 text-zinc-500" />
+                  <span>Inspect git status</span>
+                </button>
+
+                <button
+                  onClick={() => onSend('Take a screenshot of the Mac desktop')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                >
+                  <Camera className="w-3.5 h-3.5 text-zinc-500" />
+                  <span>Capture desktop screenshot</span>
+                </button>
+
+                <button
+                  onClick={() => onSend('List all files in the current workspace directory')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                >
+                  <FolderSearch className="w-3.5 h-3.5 text-zinc-500" />
+                  <span>List workspace files</span>
+                </button>
+
+                <button
+                  onClick={() => onSend('Tell me what directory Bob is running from and list the files')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-zinc-500" />
+                  <span>Test acceptance task</span>
+                </button>
+              </div>
             </div>
           </div>
         ) : (
-          <div className="max-w-3xl mx-auto space-y-4">
+          /* Active Message Stream */
+          <div className="max-w-3xl mx-auto space-y-6 pb-24">
             {events.map((ev, idx) => {
-              // 1. User Message -> Aligned to the RIGHT with User icon & Blue bubble
+              // 1. User Message (Clean Right-aligned Bubble)
               if (ev.sender === 'user' || ev.type === 'user.message') {
                 return (
-                  <div key={idx} className="flex items-start justify-end gap-3 pl-12 animate-fadeIn">
-                    <div className="p-3.5 rounded-2xl rounded-tr-sm bg-blue-600 text-white text-sm leading-relaxed max-w-[80%] shadow-md shadow-blue-600/10">
+                  <div key={idx} className="flex justify-end pl-12 animate-fadeIn">
+                    <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-zinc-800/90 border border-zinc-750/50 px-4 py-3 text-sm text-zinc-100 leading-relaxed shadow-sm">
                       <p className="whitespace-pre-wrap">{ev.message}</p>
-                    </div>
-                    <div className="p-2 rounded-xl bg-blue-500/20 text-blue-400 border border-blue-500/30 mt-0.5 flex-shrink-0" title="You">
-                      <User className="w-4 h-4" />
                     </div>
                   </div>
                 );
               }
 
-              // 2. Bob Assistant Message -> Aligned to the LEFT with Bot icon & Slate bubble
+              // 2. Bob Assistant Message (Clean natural text stream with subtle bot icon)
               if (ev.type === 'agent.message') {
                 return (
-                  <div key={idx} className="flex items-start justify-start gap-3 pr-12 animate-fadeIn">
-                    <div className="p-2 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white mt-0.5 flex-shrink-0 shadow-md shadow-blue-500/20" title="Bob">
+                  <div key={idx} className="flex items-start gap-3.5 pr-12 animate-fadeIn">
+                    <div className="w-7 h-7 rounded-lg bg-zinc-800 border border-zinc-700/60 flex items-center justify-center text-zinc-300 mt-0.5 flex-shrink-0 shadow-sm">
                       <Bot className="w-4 h-4" />
                     </div>
-                    <div className="p-3.5 rounded-2xl rounded-tl-sm bg-[#161b22] border border-[#30363d] text-sm leading-relaxed text-gray-200 max-w-[85%] shadow-sm">
+                    <div className="flex-1 space-y-2 text-sm leading-relaxed text-zinc-200 pt-0.5">
                       <p className="whitespace-pre-wrap">{ev.message}</p>
                     </div>
                   </div>
                 );
               }
 
-              // 3. Tool Activity (Started / Completed)
+              // 3. Tool Activity
               if (ev.type === 'tool.started' || ev.type === 'tool.completed') {
                 return (
-                  <div key={idx} className="pl-11 pr-4">
+                  <div key={idx} className="pl-10.5 pr-2">
                     <ToolActivity event={ev} onViewScreenshot={onViewScreenshot} />
                   </div>
                 );
               }
 
-              // 4. Approval Required
+              // 4. Approval Required Banner
               if (ev.type === 'tool.approval_required') {
                 return (
-                  <div key={idx} className="pl-11 pr-4">
+                  <div key={idx} className="pl-10.5 pr-2">
                     <ApprovalBanner
                       taskId={ev.task_id}
                       toolName={ev.tool || 'terminal'}
                       command={typeof ev.input === 'string' ? ev.input : JSON.stringify(ev.input)}
-                      reason={ev.message || 'Requires manual approval'}
+                      reason={ev.message || 'Requires security approval'}
                       onApprove={onApprove}
                     />
                   </div>
                 );
               }
 
-              // 5. Error
+              // 5. Error message
               if (ev.type === 'agent.error') {
                 return (
-                  <div key={idx} className="pl-11 pr-4 p-3 rounded-xl bg-rose-950/20 border border-rose-500/30 text-rose-300 text-xs">
-                    ⚠️ {ev.error}
+                  <div key={idx} className="pl-10.5 pr-2 p-3 rounded-xl bg-red-950/20 border border-red-800/40 text-red-300 text-xs">
+                    {ev.error}
                   </div>
                 );
               }
@@ -184,12 +218,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
               return null;
             })}
 
-            {/* Active Reasoning/Thinking Indicator (only shown while Bob is actively executing) */}
+            {/* Active Reasoning / Thinking Indicator */}
             {isRunning && currentTask?.status === 'running' && (
-              <div className="flex items-center gap-2 text-xs text-blue-400 pl-11 py-1.5 animate-pulse">
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
-                <span className="font-medium text-gray-300">
-                  {([...events].reverse().find((e) => e.type === 'agent.thinking' && (!currentTask || e.task_id === currentTask.id))?.message) || 'Bob is reasoning about next action...'}
+              <div className="flex items-center gap-2.5 text-xs text-zinc-400 pl-10.5 py-2 animate-pulse">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-zinc-400" />
+                <span className="font-medium text-zinc-400">
+                  {([...events].reverse().find((e) => e.type === 'agent.thinking' && (!currentTask || e.task_id === currentTask.id))?.message) || 'Bob is working on your request...'}
                 </span>
               </div>
             )}
@@ -199,43 +233,54 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
       </div>
 
-      {/* Input bar */}
-      <div className="p-4 border-t border-[#30363d] bg-[#161b22]">
-        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto flex items-center gap-3">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            disabled={isRunning}
-            placeholder={
-              isRunning
-                ? 'Bob is working on a task...'
-                : 'Ask Bob to do something on your Mac (e.g. "Run tests", "List files", "Take screenshot")...'
-            }
-            className="flex-1 bg-[#0d1117] text-white text-sm px-4 py-3 rounded-xl border border-[#30363d] focus:border-blue-500 focus:outline-none placeholder-gray-500 disabled:opacity-60 transition-all"
-          />
+      {/* Floating Bottom Input Bar (when conversation is active) */}
+      {(events.length > 0 || currentTask) && (
+        <div className="p-4 bg-gradient-to-t from-[#09090b] via-[#09090b]/90 to-transparent">
+          <div className="max-w-3xl mx-auto rounded-2xl border border-zinc-800/90 bg-zinc-900/90 focus-within:border-zinc-700/90 shadow-xl backdrop-blur-md p-3 transition-all">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={isRunning}
+              placeholder={
+                isRunning
+                  ? 'Bob is executing your task...'
+                  : 'Reply to Bob...'
+              }
+              rows={1}
+              className="w-full bg-transparent text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none px-2 py-1 leading-relaxed max-h-40 disabled:opacity-60"
+            />
 
-          {isRunning && currentTask ? (
-            <button
-              type="button"
-              onClick={() => onCancel(currentTask.id)}
-              className="flex items-center gap-1.5 px-5 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-sm font-semibold transition-all shadow-md shadow-rose-600/20 active:scale-95 cursor-pointer"
-            >
-              <Square className="w-4 h-4 fill-current" />
-              <span>Stop</span>
-            </button>
-          ) : (
-            <button
-              type="submit"
-              disabled={!input.trim()}
-              className="flex items-center gap-1.5 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-sm font-semibold transition-all shadow-md shadow-blue-600/20 active:scale-95 cursor-pointer"
-            >
-              <Send className="w-4 h-4" />
-              <span>Send</span>
-            </button>
-          )}
-        </form>
-      </div>
+            <div className="flex items-center justify-between pt-1.5 px-1">
+              <span className="text-[11px] text-zinc-600 font-sans">
+                Shift + Enter for new line
+              </span>
+
+              {isRunning && currentTask ? (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => onCancel(currentTask.id)}
+                  className="h-8 px-3 rounded-xl gap-1.5 text-xs font-medium"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>Stop</span>
+                </Button>
+              ) : (
+                <Button
+                  size="icon"
+                  onClick={handleSend}
+                  disabled={!input.trim()}
+                  className="h-8 w-8 rounded-xl bg-zinc-100 hover:bg-white text-zinc-900 disabled:opacity-30 transition-all"
+                >
+                  <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

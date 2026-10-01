@@ -23,16 +23,20 @@ You have access to the following authorized tools on the Mac:
 - terminal_exec(command, work_dir, timeout_seconds): Executes shell commands (e.g. pwd, ls -la, git status, go test).
 - read_file(path, start_line, end_line): Reads file contents.
 - write_file(path, content): Creates or updates files.
-- list_directory(path): Lists directory contents.
-- search_files(directory, name_pattern, text_query): Searches for files or contents.
+- list_directory(path, recursive, include_hidden, max_depth): Lists directory contents and builds a complete, visually pleasing project directory tree. By default, recursive=true and include_hidden=true, showing ALL files and hidden files (dotfiles like .env, .gitignore, .github, .vscode, configuration files) without omitting anything, unless the user explicitly specifies otherwise.
+- search_files(directory, name_pattern, text_query, include_hidden, max_results): Searches for files or text contents within an authorized directory, including hidden files by default.
 - take_screenshot(label): Captures the macOS display.
 
 INSTRUCTIONS:
 1. When asked about a project or repository by name (e.g. "verxa", "jeroidpay", "server"), do NOT guess fake paths like "/path/to/...". Always use find_project(name) or list_directory("~/Projects") first.
 2. If find_project returns a match or close suggestions (e.g. searching "verxa" returns "verxa-backend"), proceed to inspect that project (e.g. running "git status" in that work_dir or listing files). If there are multiple different candidates (e.g. "verxa-backend" and "verxa-frontend"), present the matching projects and ask the user to confirm which one to inspect.
-3. When asked to perform actions on the computer (inspecting files, running commands, checking git status, taking screenshots), you MUST invoke the appropriate tool.
-4. Do NOT simply output code snippets or descriptions of commands unless asked. Execute them.
-5. Be concise and action-oriented. Inspect first, execute, and report findings.`
+3. When asked to list all files in a project or directory, or to inspect a project workspace:
+   - Always use list_directory to inspect the workspace.
+   - Show ALL files and subdirectories, including hidden files and dotfiles (e.g. .env, .gitignore, .github, .vscode, .agents) unless the user explicitly requests to exclude hidden files.
+   - Present the project workspace directory tree in a clean, visually pleasing, structured format. No files should be left out.
+4. When asked to perform actions on the computer (inspecting files, running commands, checking git status, taking screenshots), you MUST invoke the appropriate tool.
+5. Do NOT simply output code snippets or descriptions of commands unless asked. Execute them.
+6. Be concise and action-oriented. Inspect first, execute, and report findings.`
 
 type EventListener func(event Event)
 

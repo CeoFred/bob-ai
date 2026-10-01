@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +91,111 @@ func TestFilesystemTools(t *testing.T) {
 	sRes, err := searchTool.Execute(context.Background(), searchIn)
 	if err != nil || !sRes.Success {
 		t.Fatalf("search failed: %v (%s)", err, sRes.Error)
+	}
+}
+
+func TestListDirectoryTool_Comprehensive(t *testing.T) {
+	tempDir := t.TempDir()
+	validator := security.NewPathValidator([]string{tempDir})
+	listTool := filesystem.NewListDirectoryTool(validator)
+
+	// Create a nested file tree with hidden files
+	// tempDir/
+	//   ├── .env
+	//   ├── .github/
+	//   │   └── workflows/
+	//   │       └── ci.yml
+	//   ├── src/
+	//   │   ├── main.go
+	//   │   └── utils/
+	//   │       └── helper.go
+	//   └── README.md
+	_ = os.MkdirAll(filepath.Join(tempDir, ".github", "workflows"), 0755)
+	_ = os.MkdirAll(filepath.Join(tempDir, "src", "utils"), 0755)
+
+	_ = os.WriteFile(filepath.Join(tempDir, ".env"), []byte("SECRET=123"), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, ".github", "workflows", "ci.yml"), []byte("name: CI"), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "src", "main.go"), []byte("package main"), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "src", "utils", "helper.go"), []byte("package utils"), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "README.md"), []byte("# Test Project"), 0644)
+
+	// 1. Default execution: recursive=true, include_hidden=true
+	in1, _ := json.Marshal(map[string]any{"path": tempDir})
+	res1, err := listTool.Execute(context.Background(), in1)
+	if err != nil || !res1.Success {
+		t.Fatalf("default list failed: %v (%s)", err, res1.Error)
+	}
+
+	data1, ok := res1.Data.(filesystem.DirectoryListingResult)
+	if !ok {
+		t.Fatalf("expected DirectoryListingResult, got %T", res1.Data)
+	}
+
+	// 5 files total: .env, ci.yml, main.go, helper.go, README.md
+	if data1.TotalFiles != 5 {
+		t.Errorf("expected 5 files, got %d", data1.TotalFiles)
+	}
+	// 4 directories total: .github, workflows, src, utils
+	if data1.TotalDirectories != 4 {
+		t.Errorf("expected 4 directories, got %d", data1.TotalDirectories)
+	}
+
+	// Output should contain tree structure with icons and hidden files
+	if !strings.Contains(res1.Output, "📁 .github/") || !strings.Contains(res1.Output, "📄 .env") {
+		t.Errorf("output missing hidden files: %s", res1.Output)
+	}
+	if !strings.Contains(res1.Output, "├──") || !strings.Contains(res1.Output, "└──") {
+		t.Errorf("output missing tree connectors: %s", res1.Output)
+	}
+
+	// 2. Test include_hidden=false
+	in2, _ := json.Marshal(map[string]any{
+		"path":           tempDir,
+		"include_hidden": false,
+	})
+	res2, err := listTool.Execute(context.Background(), in2)
+	if err != nil || !res2.Success {
+		t.Fatalf("non-hidden list failed: %v", err)
+	}
+	data2 := res2.Data.(filesystem.DirectoryListingResult)
+	// Without hidden files: main.go, helper.go, README.md (3 files), src, utils (2 dirs)
+	if data2.TotalFiles != 3 {
+		t.Errorf("expected 3 non-hidden files, got %d", data2.TotalFiles)
+	}
+	if strings.Contains(res2.Output, ".env") || strings.Contains(res2.Output, ".github") {
+		t.Errorf("output should not contain hidden files when include_hidden=false: %s", res2.Output)
+	}
+
+	// 3. Test non-recursive (top level only)
+	in3, _ := json.Marshal(map[string]any{
+		"path":      tempDir,
+		"recursive": false,
+	})
+	res3, err := listTool.Execute(context.Background(), in3)
+	if err != nil || !res3.Success {
+		t.Fatalf("non-recursive list failed: %v", err)
+	}
+	data3 := res3.Data.(filesystem.DirectoryListingResult)
+	// Immediate top level items: 2 files (.env, README.md) and 2 dirs (.github, src)
+	if data3.TotalFiles != 2 {
+		t.Errorf("expected 2 top-level files, got %d", data3.TotalFiles)
+	}
+	if data3.TotalDirectories != 2 {
+		t.Errorf("expected 2 top-level dirs, got %d", data3.TotalDirectories)
+	}
+
+	// 4. Test max_depth = 1
+	in4, _ := json.Marshal(map[string]any{
+		"path":      tempDir,
+		"max_depth": 1,
+	})
+	res4, err := listTool.Execute(context.Background(), in4)
+	if err != nil || !res4.Success {
+		t.Fatalf("depth-limited list failed: %v", err)
+	}
+	data4 := res4.Data.(filesystem.DirectoryListingResult)
+	if data4.TotalFiles != 2 {
+		t.Errorf("expected 2 files at depth 1, got %d", data4.TotalFiles)
 	}
 }
 

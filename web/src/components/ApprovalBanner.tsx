@@ -1,5 +1,6 @@
-import React from 'react';
-import { AlertTriangle, Check, X } from 'lucide-react';
+import { Check, X, ShieldAlert } from 'lucide-react';
+import { Button } from './ui/button';
+import { Badge } from './ui/badge';
 
 interface ApprovalBannerProps {
   taskId: string;
@@ -17,43 +18,46 @@ export const ApprovalBanner: React.FC<ApprovalBannerProps> = ({
   onApprove,
 }) => {
   return (
-    <div className="my-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 animate-fadeIn shadow-lg shadow-amber-950/20">
-      <div className="flex items-start gap-3">
-        <div className="p-2 rounded-lg bg-amber-500/20 text-amber-400 mt-0.5">
-          <AlertTriangle className="w-5 h-5" />
-        </div>
-        <div className="flex-1 space-y-2">
+    <div className="my-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-zinc-200 animate-fadeIn space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2.5">
+          <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400 mt-0.5">
+            <ShieldAlert className="w-4 h-4" />
+          </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm text-amber-300">Security Approval Required</span>
-              <span className="text-[11px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 font-mono">
+              <span className="font-medium text-xs text-amber-300">Approval Required</span>
+              <Badge variant="warning" className="font-mono text-[10px] px-1.5 py-0">
                 {toolName}
-              </span>
+              </Badge>
             </div>
-            <p className="text-xs text-amber-300/80 mt-1">{reason}</p>
-          </div>
-
-          <div className="p-2.5 rounded-lg bg-[#0d1117] border border-[#30363d] font-mono text-xs text-amber-100 overflow-x-auto">
-            {command}
-          </div>
-
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              onClick={() => onApprove(taskId, true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors shadow-sm"
-            >
-              <Check className="w-3.5 h-3.5" />
-              <span>Allow & Execute</span>
-            </button>
-            <button
-              onClick={() => onApprove(taskId, false)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#21262d] hover:bg-rose-950/40 text-rose-300 border border-rose-500/30 text-xs font-medium transition-colors"
-            >
-              <X className="w-3.5 h-3.5" />
-              <span>Reject Execution</span>
-            </button>
+            <p className="text-xs text-zinc-400 mt-1">{reason}</p>
           </div>
         </div>
+      </div>
+
+      <div className="p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-xs text-zinc-300 overflow-x-auto whitespace-pre-wrap">
+        {command}
+      </div>
+
+      <div className="flex items-center gap-2 pt-1">
+        <Button
+          size="sm"
+          onClick={() => onApprove(taskId, true)}
+          className="bg-emerald-600 hover:bg-emerald-500 text-white gap-1.5 h-8 text-xs font-medium"
+        >
+          <Check className="w-3.5 h-3.5" />
+          <span>Approve & Run</span>
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => onApprove(taskId, false)}
+          className="border-zinc-700 text-zinc-400 hover:text-red-300 hover:bg-red-950/20 hover:border-red-800/40 gap-1.5 h-8 text-xs font-medium"
+        >
+          <X className="w-3.5 h-3.5" />
+          <span>Reject</span>
+        </Button>
       </div>
     </div>
   );

@@ -5,7 +5,15 @@ import { ChatView } from './components/ChatView';
 import { ScreenshotModal } from './components/ScreenshotModal';
 import { AuditModal } from './components/AuditModal';
 import { SystemStatus, Session, Task, AgentEvent } from './types';
-import { fetchStatus, fetchSessions, fetchSession, createSession, createTask, cancelTask, approveTask } from './services/api';
+import {
+  fetchStatus,
+  fetchSessions,
+  fetchSession,
+  createSession,
+  createTask,
+  cancelTask,
+  approveTask,
+} from './services/api';
 import { wsClient } from './services/websocket';
 
 export const App: React.FC = () => {
@@ -13,6 +21,7 @@ export const App: React.FC = () => {
   const [online, setOnline] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>('');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [currentTask, setCurrentTask] = useState<Task | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [screenshotModalUrl, setScreenshotModalUrl] = useState<string | null>(null);
@@ -111,7 +120,6 @@ export const App: React.FC = () => {
           }
         }
       } else if (detail.session && detail.session.messages) {
-        // Fallback for direct session message history
         for (const m of detail.session.messages) {
           if (m.role === 'user') {
             reconstructedEvents.push({
@@ -143,7 +151,6 @@ export const App: React.FC = () => {
   };
 
   const handleIncomingEvent = (ev: AgentEvent) => {
-    // Only append event if it matches currently active session or has no session specified
     const currentActive = activeSessionIdRef.current;
     if (!ev.session_id || ev.session_id === currentActive) {
       setEvents((prev) => [...prev, ev]);
@@ -201,7 +208,6 @@ export const App: React.FC = () => {
         setActiveSessionId(sessId);
       }
 
-      // Append user prompt event (RIGHT-aligned with sender: 'user')
       const userEvent: AgentEvent = {
         type: 'user.message',
         sender: 'user',
@@ -247,9 +253,18 @@ export const App: React.FC = () => {
     }
   };
 
+  const activeSession = sessions.find((s) => s.id === activeSessionId);
+
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#0d1117] font-sans antialiased text-gray-200">
-      <Header status={status} online={online} onOpenAudit={() => setAuditModalOpen(true)} />
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#09090b] font-sans antialiased text-zinc-100">
+      <Header
+        status={status}
+        online={online}
+        onOpenAudit={() => setAuditModalOpen(true)}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+        activeSessionTitle={activeSession?.title}
+      />
 
       <div className="flex flex-1 overflow-hidden">
         <Sidebar
@@ -257,10 +272,10 @@ export const App: React.FC = () => {
           activeSessionId={activeSessionId}
           onSelectSession={(id) => selectSession(id)}
           onNewSession={handleNewSession}
-          status={status}
+          open={sidebarOpen}
         />
 
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <main className="flex-1 flex flex-col overflow-hidden bg-[#09090b]">
           <ChatView
             currentTask={currentTask}
             events={events}
