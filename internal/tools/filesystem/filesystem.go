@@ -398,3 +398,70 @@ func (t *SearchFilesTool) Execute(ctx context.Context, rawInput json.RawMessage)
 		Data:    matches,
 	}, nil
 }
+
+// FindProjectTool searches authorized workspaces for a project or folder by name.
+type FindProjectTool struct {
+	validator *security.PathValidator
+}
+
+func NewFindProjectTool(validator *security.PathValidator) *FindProjectTool {
+	return &FindProjectTool{validator: validator}
+}
+
+func (t *FindProjectTool) Name() string {
+	return "find_project"
+}
+
+func (t *FindProjectTool) Description() string {
+	return "Locates a project, repository, or subdirectory by name across all authorized workspaces (e.g. 'jeroidpay', 'oxcart', 'server'). Returns exact absolute paths."
+}
+
+func (t *FindProjectTool) InputSchema() any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"name": map[string]any{
+				"type":        "string",
+				"description": "Project or directory name to locate (e.g. 'jeroidpay', 'server', 'Bob-AI').",
+			},
+		},
+		"required": []string{"name"},
+	}
+}
+
+type FindProjectInput struct {
+	Name string `json:"name"`
+}
+
+func (t *FindProjectTool) Execute(ctx context.Context, rawInput json.RawMessage) (registry.ToolResult, error) {
+	var in FindProjectInput
+	if err := json.Unmarshal(rawInput, &in); err != nil {
+		return registry.ToolResult{Success: false, Error: err.Error()}, err
+	}
+
+	trimmed := strings.TrimSpace(in.Name)
+	if trimmed == "" {
+		return registry.ToolResult{Success: false, Error: "project name cannot be empty"}, fmt.Errorf("empty name")
+	}
+
+	matches := t.validator.FindMatchingPaths(trimmed)
+	if len(matches) == 0 {
+		return registry.ToolResult{
+			Success: true,
+			Output:  fmt.Sprintf("No project or directory named %q found in authorized workspaces (%v).", trimmed, t.validator.AllowedRoots()),
+			Data:    []string{},
+		}, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d matching path(s) for %q:\n", len(matches), trimmed))
+	for _, m := range matches {
+		sb.WriteString(fmt.Sprintf("- %s\n", m))
+	}
+
+	return registry.ToolResult{
+		Success: true,
+		Output:  sb.String(),
+		Data:    matches,
+	}, nil
+}

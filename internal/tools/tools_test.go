@@ -126,3 +126,24 @@ func TestToolRegistry(t *testing.T) {
 		t.Errorf("unexpected tool definitions: %+v", defs)
 	}
 }
+
+func TestFindProjectTool(t *testing.T) {
+	tempDir := t.TempDir()
+	jeroidpayDir := filepath.Join(tempDir, "jeroidpay", "server")
+	_ = os.MkdirAll(jeroidpayDir, 0755)
+
+	validator := security.NewPathValidator([]string{tempDir})
+	findTool := filesystem.NewFindProjectTool(validator)
+
+	findIn, _ := json.Marshal(map[string]any{"name": "jeroidpay"})
+	res, err := findTool.Execute(context.Background(), findIn)
+	if err != nil || !res.Success {
+		t.Fatalf("find_project failed: %v (%s)", err, res.Error)
+	}
+
+	matches, ok := res.Data.([]string)
+	if !ok || len(matches) == 0 {
+		t.Fatalf("expected matches, got %v", res.Data)
+	}
+}
+

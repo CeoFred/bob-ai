@@ -93,3 +93,34 @@ func TestRedactor_Redact(t *testing.T) {
 		t.Errorf("redacted output still contains secret token: %s", redacted)
 	}
 }
+
+func TestPathValidator_SmartProjectResolution(t *testing.T) {
+	tempDir := t.TempDir()
+	projectsDir := filepath.Join(tempDir, "Projects")
+	jeroidpayServer := filepath.Join(projectsDir, "jeroidpay", "server")
+	_ = os.MkdirAll(jeroidpayServer, 0755)
+
+	validator := security.NewPathValidator([]string{projectsDir})
+
+	// 1. Placeholder path resolution: /path/to/jeroidpay/server -> resolves to projectsDir/jeroidpay/server
+	resolved, err := validator.ValidatePath("/path/to/jeroidpay/server")
+	if err != nil {
+		t.Fatalf("expected placeholder path to resolve, got error: %v", err)
+	}
+	realJeroid, _ := filepath.EvalSymlinks(jeroidpayServer)
+	if resolved != realJeroid {
+		t.Errorf("got resolved path %s, want %s", resolved, realJeroid)
+	}
+
+	// 2. Folder name resolution: "jeroidpay" -> resolves to projectsDir/jeroidpay
+	jeroidpayRoot := filepath.Join(projectsDir, "jeroidpay")
+	resolvedRoot, err := validator.ValidatePath("jeroidpay")
+	if err != nil {
+		t.Fatalf("expected folder name to resolve, got error: %v", err)
+	}
+	realRoot, _ := filepath.EvalSymlinks(jeroidpayRoot)
+	if resolvedRoot != realRoot {
+		t.Errorf("got resolved root %s, want %s", resolvedRoot, realRoot)
+	}
+}
+

@@ -87,6 +87,7 @@ func main() {
 	_ = toolReg.Register(filesystem.NewWriteFileTool(pathValidator))
 	_ = toolReg.Register(filesystem.NewListDirectoryTool(pathValidator))
 	_ = toolReg.Register(filesystem.NewSearchFilesTool(pathValidator))
+	_ = toolReg.Register(filesystem.NewFindProjectTool(pathValidator))
 	_ = toolReg.Register(screenshot.NewScreenshotTool(cfg.Storage.ScreenshotsDir))
 
 	// 6. Initialize Computer Abstraction
