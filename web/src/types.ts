@@ -41,23 +41,61 @@ export interface Task {
   };
 }
 
+export type SessionType = 'project' | 'conversation';
+
 export interface SessionMessage {
   role: string;
   content: string;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  summary?: string;
+  tech_stack?: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectWithSessions extends Project {
+  sessions: Session[];
+}
+
 export interface Session {
   id: string;
+  project_id?: string;
+  type: SessionType;
   title: string;
+  project_path?: string;
+  project_name?: string;
   created_at: string;
   last_activity: string;
   messages?: SessionMessage[];
   task_ids: string[];
 }
 
+export interface BrowseItem {
+  name: string;
+  path: string;
+  is_project: boolean;
+}
+
+export interface BrowseResponse {
+  current_path: string;
+  parent_path: string;
+  directories: BrowseItem[];
+}
+
+export interface ProjectSummary {
+  name: string;
+  path: string;
+}
+
 export interface SessionDetailResponse {
   session: Session;
   tasks: Task[];
+  project?: Project;
 }
 
 export interface SystemInfo {

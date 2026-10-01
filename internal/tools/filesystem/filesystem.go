@@ -69,7 +69,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, rawInput json.RawMessage) (r
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
 
-	validPath, err := t.validator.ValidatePath(in.Path)
+	validPath, err := t.validator.ValidatePathWithContext(ctx, in.Path)
 	if err != nil {
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
@@ -176,7 +176,15 @@ func (t *WriteFileTool) Execute(ctx context.Context, rawInput json.RawMessage) (
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
 
-	validPath, err := t.validator.ValidatePath(in.Path)
+	// In conversation mode, file writes are strictly forbidden
+	if sc, ok := security.SessionFromContext(ctx); ok && (sc.Type == "conversation" || sc.ReadOnly) {
+		return registry.ToolResult{
+			Success: false,
+			Error:   "File modifications are disabled in General Conversation mode. Switch to or start a Project session to modify project files.",
+		}, nil
+	}
+
+	validPath, err := t.validator.ValidatePathWithContext(ctx, in.Path)
 	if err != nil {
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
@@ -296,7 +304,14 @@ func (t *ListDirectoryTool) Execute(ctx context.Context, rawInput json.RawMessag
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
 
-	validPath, err := t.validator.ValidatePath(in.Path)
+	targetPath := in.Path
+	if strings.TrimSpace(targetPath) == "" || targetPath == "." {
+		if sc, ok := security.SessionFromContext(ctx); ok && sc.ProjectPath != "" {
+			targetPath = sc.ProjectPath
+		}
+	}
+
+	validPath, err := t.validator.ValidatePathWithContext(ctx, targetPath)
 	if err != nil {
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
@@ -547,7 +562,14 @@ func (t *SearchFilesTool) Execute(ctx context.Context, rawInput json.RawMessage)
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
 
-	validDir, err := t.validator.ValidatePath(in.Directory)
+	targetDir := in.Directory
+	if strings.TrimSpace(targetDir) == "" || targetDir == "." {
+		if sc, ok := security.SessionFromContext(ctx); ok && sc.ProjectPath != "" {
+			targetDir = sc.ProjectPath
+		}
+	}
+
+	validDir, err := t.validator.ValidatePathWithContext(ctx, targetDir)
 	if err != nil {
 		return registry.ToolResult{Success: false, Error: err.Error()}, err
 	}
@@ -662,7 +684,7 @@ func (t *FindProjectTool) Execute(ctx context.Context, rawInput json.RawMessage)
 		return registry.ToolResult{Success: false, Error: "project name cannot be empty"}, fmt.Errorf("empty name")
 	}
 
-	matches := t.validator.FindMatchingPaths(trimmed)
+	matches := t.validator.FindMatchingPathsWithContext(ctx, trimmed)
 	if len(matches) == 0 {
 		return registry.ToolResult{
 			Success: true,

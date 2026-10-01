@@ -1,6 +1,7 @@
 package security
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -8,6 +9,34 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+type sessionContextKeyType struct{}
+
+// SessionContextKey is the context key for attaching session security context.
+var SessionContextKey = sessionContextKeyType{}
+
+// SessionContext encapsulates dynamic session parameters for security & path scoping.
+type SessionContext struct {
+	SessionID   string
+	Type        string // "project" or "conversation"
+	ProjectPath string // For project sessions: the absolute root folder
+	ProjectName string
+	ReadOnly    bool   // True if conversation mode (blocks writes)
+}
+
+// ContextWithSession attaches a SessionContext to context.Context.
+func ContextWithSession(ctx context.Context, sc SessionContext) context.Context {
+	return context.WithValue(ctx, SessionContextKey, sc)
+}
+
+// SessionFromContext retrieves the SessionContext from context.Context.
+func SessionFromContext(ctx context.Context) (SessionContext, bool) {
+	if ctx == nil {
+		return SessionContext{}, false
+	}
+	sc, ok := ctx.Value(SessionContextKey).(SessionContext)
+	return sc, ok
+}
 
 var (
 	ErrAccessDenied  = errors.New("access denied: path outside allowed workspace")
@@ -47,13 +76,51 @@ func (pv *PathValidator) AllowedRoots() []string {
 	return pv.allowedRoots
 }
 
+func (pv *PathValidator) effectiveRoots(ctx context.Context) []string {
+	if sc, ok := SessionFromContext(ctx); ok {
+		if sc.Type == "project" && sc.ProjectPath != "" {
+			expanded := expandHome(sc.ProjectPath)
+			if abs, err := filepath.Abs(expanded); err == nil {
+				if real, err := filepath.EvalSymlinks(abs); err == nil {
+					return []string{real}
+				}
+				return []string{abs}
+			}
+			return []string{sc.ProjectPath}
+		}
+		if sc.Type == "conversation" {
+			home, _ := os.UserHomeDir()
+			if home != "" {
+				if real, err := filepath.EvalSymlinks(home); err == nil {
+					return []string{real}
+				}
+				return []string{home}
+			}
+		}
+	}
+	return pv.allowedRoots
+}
+
 // ValidatePath checks if targetPath is safe and strictly inside one of the allowed roots.
-// If targetPath is a relative folder name, project name, or contains generic placeholders (e.g. /path/to/project),
-// it automatically attempts to resolve and locate the matching project inside allowed workspaces.
 func (pv *PathValidator) ValidatePath(targetPath string) (string, error) {
+	return pv.ValidatePathWithContext(context.Background(), targetPath)
+}
+
+// ValidatePathWithContext checks if targetPath is safe with respect to the session context (if any).
+func (pv *PathValidator) ValidatePathWithContext(ctx context.Context, targetPath string) (string, error) {
 	trimmed := strings.TrimSpace(targetPath)
 	if trimmed == "" {
 		return "", ErrInvalidPath
+	}
+
+	roots := pv.effectiveRoots(ctx)
+
+	// In project mode, if path is relative, resolve relative to the project root
+	sc, hasSession := SessionFromContext(ctx)
+	if hasSession && sc.Type == "project" && sc.ProjectPath != "" {
+		if !filepath.IsAbs(trimmed) && !strings.HasPrefix(trimmed, "~") {
+			trimmed = filepath.Join(sc.ProjectPath, trimmed)
+		}
 	}
 
 	// 1. First, attempt standard direct resolution
@@ -61,7 +128,7 @@ func (pv *PathValidator) ValidatePath(targetPath string) (string, error) {
 	absPath, err := filepath.Abs(expanded)
 	if err == nil {
 		cleanPath := filepath.Clean(absPath)
-		if resolved, ok := pv.isInsideAllowedRoots(cleanPath); ok {
+		if resolved, ok := isInsideRoots(cleanPath, roots); ok {
 			return resolved, nil
 		}
 	}
@@ -69,8 +136,8 @@ func (pv *PathValidator) ValidatePath(targetPath string) (string, error) {
 	// 2. If direct resolution failed, check if targetPath is a placeholder (e.g. /path/to/xyz) or relative project name
 	cleanQuery := stripPlaceholderPrefixes(trimmed)
 
-	// 3. Search across allowed workspace roots
-	matches := pv.FindMatchingPaths(cleanQuery)
+	// 3. Search across effective workspace roots
+	matches := pv.FindMatchingPathsWithContext(ctx, cleanQuery)
 	if len(matches) == 1 {
 		return matches[0], nil
 	} else if len(matches) > 1 {
@@ -90,10 +157,14 @@ func (pv *PathValidator) ValidatePath(targetPath string) (string, error) {
 		return "", fmt.Errorf("multiple matching projects found for %q: %v. Please specify the target directory explicitly", cleanQuery, matches)
 	}
 
-	return "", fmt.Errorf("%w: %s (allowed roots: %v)", ErrAccessDenied, targetPath, pv.allowedRoots)
+	return "", fmt.Errorf("%w: %s (allowed roots: %v)", ErrAccessDenied, targetPath, roots)
 }
 
 func (pv *PathValidator) isInsideAllowedRoots(cleanPath string) (string, bool) {
+	return isInsideRoots(cleanPath, pv.allowedRoots)
+}
+
+func isInsideRoots(cleanPath string, roots []string) (string, bool) {
 	// If file or directory exists, evaluate symlinks
 	target := cleanPath
 	if _, err := os.Stat(cleanPath); err == nil {
@@ -108,7 +179,7 @@ func (pv *PathValidator) isInsideAllowedRoots(cleanPath string) (string, bool) {
 		}
 	}
 
-	for _, root := range pv.allowedRoots {
+	for _, root := range roots {
 		rel, err := filepath.Rel(root, target)
 		if err == nil && !strings.HasPrefix(rel, "..") && rel != ".." {
 			return target, true
@@ -119,6 +190,11 @@ func (pv *PathValidator) isInsideAllowedRoots(cleanPath string) (string, bool) {
 
 // FindMatchingPaths searches allowed workspace roots for folders matching query using exact, prefix, substring, token, and fuzzy similarity.
 func (pv *PathValidator) FindMatchingPaths(query string) []string {
+	return pv.FindMatchingPathsWithContext(context.Background(), query)
+}
+
+// FindMatchingPathsWithContext searches effective workspace roots for folders matching query.
+func (pv *PathValidator) FindMatchingPathsWithContext(ctx context.Context, query string) []string {
 	cleanQuery := strings.TrimSpace(query)
 	cleanQuery = stripPlaceholderPrefixes(cleanQuery)
 	cleanQuery = cleanQueryWords(cleanQuery)
@@ -137,7 +213,8 @@ func (pv *PathValidator) FindMatchingPaths(query string) []string {
 	var scored []scoredMatch
 	seenPaths := make(map[string]bool)
 
-	for _, root := range pv.allowedRoots {
+	roots := pv.effectiveRoots(ctx)
+	for _, root := range roots {
 		// A. Check direct join (e.g. root/jeroidpay or root/jeroidpay/server)
 		direct := filepath.Join(root, cleanQuery)
 		if info, err := os.Stat(direct); err == nil && info.IsDir() {

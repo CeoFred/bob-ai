@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#18181b" />
+      <stop offset="100%" stop-color="#09090b" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="100%" stop-color="#10b981" />
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#34d399" stop-opacity="0.05" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.6" />
+    </filter>
+  </defs>
+
+  <!-- Background Squircle -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)" stroke="#27272a" stroke-width="8" filter="url(#shadow)" />
+  <rect x="28" y="28" width="456" height="456" rx="100" fill="none" stroke="url(#glow)" stroke-width="2" />
+
+  <!-- Robot Head Base -->
+  <rect x="116" y="136" width="280" height="230" rx="48" fill="#27272a" stroke="#3f3f46" stroke-width="6" />
+
+  <!-- Top Antenna -->
+  <line x1="256" y1="90" x2="256" y2="136" stroke="#3b82f6" stroke-width="8" stroke-linecap="round" />
+  <circle cx="256" cy="80" r="14" fill="#3b82f6" />
+  <circle cx="256" cy="80" r="6" fill="#60a5fa" />
+
+  <!-- Ear Mounts -->
+  <rect x="96" y="210" width="20" height="70" rx="8" fill="#3f3f46" />
+  <rect x="396" y="210" width="20" height="70" rx="8" fill="#3f3f46" />
+
+  <!-- Robot Screen / Visor -->
+  <rect x="146" y="176" width="220" height="130" rx="28" fill="#09090b" stroke="#18181b" stroke-width="4" />
+
+  <!-- Glowing Eyes -->
+  <!-- Left Eye -->
+  <circle cx="206" cy="235" r="24" fill="#10b981" />
+  <circle cx="206" cy="235" r="14" fill="#6ee7b7" />
+  <circle cx="211" cy="230" r="4" fill="#ffffff" />
+
+  <!-- Right Eye -->
+  <circle cx="306" cy="235" r="24" fill="#10b981" />
+  <circle cx="306" cy="235" r="14" fill="#6ee7b7" />
+  <circle cx="311" cy="230" r="4" fill="#ffffff" />
+
+  <!-- Mouth / Status Bar -->
+  <rect x="216" y="278" width="80" height="8" rx="4" fill="#3b82f6" />
+
+  <!-- Subtle Chest / Collar Indicator -->
+  <path d="M 186 366 L 326 366 L 310 400 L 202 400 Z" fill="#1e293b" stroke="#334155" stroke-width="4" />
+  <circle cx="256" cy="383" r="5" fill="#38bdf8" />
+</svg>

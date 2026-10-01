@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { SystemStatus } from '../types';
+import { SystemStatus, Session } from '../types';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Tooltip } from './ui/tooltip';
@@ -10,6 +10,10 @@ import {
   Cpu,
   HardDrive,
   Globe,
+  Link as LinkIcon,
+  Check,
+  FolderGit2,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -18,7 +22,8 @@ interface HeaderProps {
   onOpenAudit: () => void;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
-  activeSessionTitle?: string;
+  activeSession?: Session | null;
+  onNewChat?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -27,9 +32,25 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenAudit,
   sidebarOpen,
   onToggleSidebar,
-  activeSessionTitle,
+  activeSession,
+  onNewChat,
 }) => {
   const [showSystemDetails, setShowSystemDetails] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const activeSessionId = activeSession?.id;
+
+  const handleCopyLink = async () => {
+    if (!activeSessionId) return;
+    const url = `${window.location.origin}/c/${activeSessionId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      console.error('Failed to copy chat URL:', e);
+    }
+  };
 
   return (
     <header className="flex items-center justify-between px-4 h-13 border-b border-zinc-800/80 bg-zinc-950/70 backdrop-blur-md select-none z-20">
@@ -39,20 +60,63 @@ export const Header: React.FC<HeaderProps> = ({
           variant="ghost"
           size="icon"
           onClick={onToggleSidebar}
-          className="text-zinc-400 hover:text-zinc-100 hover:bg-zinc-850 h-8 w-8"
+          className="text-zinc-400 hover:text-zinc-100 hover:bg-zinc-850 h-8 w-8 cursor-pointer"
           title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
         >
           <PanelLeft className="w-4 h-4" />
         </Button>
 
         <div className="flex items-center gap-2.5 min-w-0">
-          <span className="font-semibold text-sm tracking-tight text-zinc-100">Bob</span>
-          {activeSessionTitle && (
+          <a
+            href="/"
+            onClick={(e) => {
+              if (onNewChat && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+                e.preventDefault();
+                onNewChat();
+              }
+            }}
+            className="font-semibold text-sm tracking-tight text-zinc-100 hover:text-white transition-colors cursor-pointer no-underline"
+          >
+            Bob
+          </a>
+
+          {activeSession && (
             <>
               <span className="text-zinc-600 hidden sm:inline">/</span>
-              <span className="text-xs text-zinc-400 truncate max-w-[200px] sm:max-w-[320px] hidden sm:inline">
-                {activeSessionTitle}
-              </span>
+              {activeSession.type === 'project' ? (
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-blue-950/50 border border-blue-800/40 text-blue-200 text-xs truncate max-w-[200px] sm:max-w-[320px]">
+                  <FolderGit2 className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+                  <span className="font-medium truncate">{activeSession.project_name || activeSession.title}</span>
+                  <span className="text-[10px] text-blue-400/80 font-mono hidden md:inline truncate" title={activeSession.project_path}>
+                    ({activeSession.project_path})
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs truncate max-w-[200px] sm:max-w-[320px]">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                  <span className="truncate">{activeSession.title || 'Conversation'}</span>
+                  <span className="text-[10px] text-zinc-500 hidden md:inline">
+                    (Read-Only)
+                  </span>
+                </div>
+              )}
+
+              {activeSessionId && (
+                <Tooltip content={copied ? 'Link copied!' : 'Copy chat link'}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleCopyLink}
+                    className="h-6 w-6 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors"
+                  >
+                    {copied ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    ) : (
+                      <LinkIcon className="w-3.5 h-3.5" />
+                    )}
+                  </Button>
+                </Tooltip>
+              )}
             </>
           )}
         </div>

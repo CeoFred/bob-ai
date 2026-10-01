@@ -1,0 +1,46 @@
+# Config file for Air (Go hot-reloader)
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/bob cmd/bob/main.go"
+bin = "tmp/bob"
+full_bin = "./tmp/bob"
+include_ext = ["go", "yaml", "yml", "env"]
+exclude_ext = ["js", "ts", "tsx", "css", "html", "map", "json"]
+exclude_dir = [
+  "tmp",
+  "bin",
+  "web",
+  "docs",
+  ".git",
+  ".bob_data",
+  ".bob",
+  "screenshots",
+  "graphify-out",
+  ".agents"
+]
+include_dir = ["cmd", "internal"]
+exclude_regex = ["_test\\.go$"]
+exclude_unchanged = true
+follow_symlink = false
+log = "air.log"
+delay = 500
+stop_on_error = true
+send_interrupt = true
+kill_delay = 500
+rerun = false
+rerun_delay = 500
+
+[log]
+time = false
+main_only = false
+
+[color]
+main = "magenta"
+watcher = "cyan"
+build = "yellow"
+runner = "green"
+
+[misc]
+clean_on_exit = true

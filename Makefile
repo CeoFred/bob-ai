@@ -1,4 +1,4 @@
-.PHONY: all build build-web build-backend test run dev sysinfo clean service-install service-uninstall
+.PHONY: all build build-web build-backend test run dev dev-web dev-backend sysinfo clean service-install service-uninstall
 
 all: build
 
@@ -22,8 +22,16 @@ run: build
 	./bin/bob
 
 dev:
-	@echo "==> Running Bob in foreground dev mode..."
-	go run cmd/bob/main.go
+	@echo "==> Starting Bob full-stack live-reload dev mode..."
+	./scripts/dev.sh
+
+dev-web:
+	@echo "==> Starting Vite frontend dev server with HMR..."
+	cd web && npm run dev
+
+dev-backend:
+	@echo "==> Starting Go backend with auto-reload..."
+	air || go run cmd/bob/main.go
 
 sysinfo:
 	@echo "==> Inspecting host hardware and recommending LLMs..."
@@ -39,4 +47,5 @@ service-uninstall:
 
 clean:
 	@echo "==> Cleaning artifacts..."
-	rm -rf bin web/dist
+	rm -rf bin tmp web/dist
+

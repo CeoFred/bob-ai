@@ -1,9 +1,16 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -18,8 +25,11 @@ import (
 	"bob/internal/tools/registry"
 )
 
-func setupTestServer(t *testing.T, token string) (*server.Server, *config.Config, *agent.Agent) {
+func setupTestServer(t *testing.T, token string) (*server.Server, *config.Config, *agent.Agent, string) {
 	tempDir := t.TempDir()
+	webDir := filepath.Join(tempDir, "web")
+	_ = os.MkdirAll(webDir, 0755)
+	_ = os.WriteFile(filepath.Join(webDir, "index.html"), []byte("<html><body>Bob SPA</body></html>"), 0644)
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{
@@ -70,18 +80,14 @@ func setupTestServer(t *testing.T, token string) (*server.Server, *config.Config
 		TimeoutSeconds: cfg.Agent.TimeoutSeconds,
 	})
 
-	srv := server.NewServer(cfg, ag, sessMgr, auditLog, ca, "")
-	return srv, cfg, ag
+	srv := server.NewServer(cfg, ag, sessMgr, auditLog, ca, webDir)
+	return srv, cfg, ag, webDir
 }
 
 func TestServer_AuthMiddleware(t *testing.T) {
 	token := "secure_secret_token_123"
-	_, _, _ = setupTestServer(t, token)
-
-	handler := server.AuthMiddleware(token, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}))
+	srv, _, _, _ := setupTestServer(t, token)
+	handler := srv.Handler()
 
 	// 1. Health check is always public without token
 	healthReq := httptest.NewRequest("GET", "/health", nil)
@@ -110,14 +116,7 @@ func TestServer_AuthMiddleware(t *testing.T) {
 }
 
 func TestServer_TaskCreation(t *testing.T) {
-	srv, cfg, ag := setupTestServer(t, "")
-
-	// Create test server
-	go func() {
-		_ = srv.Start()
-	}()
-	time.Sleep(50 * time.Millisecond)
-	defer func() { _ = srv.Shutdown(context.Background()) }()
+	_, cfg, ag, _ := setupTestServer(t, "")
 
 	task := ag.CreateTask("", "Hello Bob API")
 	ag.Run(context.Background(), task)
@@ -134,4 +133,81 @@ func TestServer_TaskCreation(t *testing.T) {
 	}
 
 	_ = cfg
+}
+
+func TestServer_SessionEndpoints_And_ChatRoutes(t *testing.T) {
+	srv, _, _, _ := setupTestServer(t, "")
+	handler := srv.Handler()
+
+	uuidRegex := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+	// 1. POST /api/sessions (creates session with unique UUID)
+	createReq := httptest.NewRequest("POST", "/api/sessions", bytes.NewBuffer([]byte("{}")))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, createReq)
+
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201 Created, got %d", createRec.Code)
+	}
+
+	var createdSess sessions.Session
+	if err := json.NewDecoder(createRec.Body).Decode(&createdSess); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if !uuidRegex.MatchString(createdSess.ID) {
+		t.Errorf("expected session ID to be a UUID v4, got: %s", createdSess.ID)
+	}
+
+	// 2. GET /api/sessions/{id}
+	getReq := httptest.NewRequest("GET", fmt.Sprintf("/api/sessions/%s", createdSess.ID), nil)
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected status 200 OK, got %d", getRec.Code)
+	}
+
+	var sessionDetail struct {
+		Session sessions.Session `json:"session"`
+		Tasks   []agent.Task     `json:"tasks"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&sessionDetail); err != nil {
+		t.Fatalf("failed to decode session detail: %v", err)
+	}
+	if sessionDetail.Session.ID != createdSess.ID {
+		t.Errorf("expected session ID %s, got %s", createdSess.ID, sessionDetail.Session.ID)
+	}
+
+	// 3. GET /c/{id} (SPA Route should serve index.html)
+	spaReq := httptest.NewRequest("GET", fmt.Sprintf("/c/%s", createdSess.ID), nil)
+	spaRec := httptest.NewRecorder()
+	handler.ServeHTTP(spaRec, spaReq)
+
+	if spaRec.Code != http.StatusOK {
+		t.Fatalf("expected status 200 for SPA route, got %d", spaRec.Code)
+	}
+
+	body, _ := io.ReadAll(spaRec.Body)
+	if !bytes.Contains(body, []byte("Bob SPA")) {
+		t.Errorf("expected SPA route /c/{id} to return index.html, got %s", string(body))
+	}
+
+	// 4. DELETE /api/sessions/{id}
+	delReq := httptest.NewRequest("DELETE", fmt.Sprintf("/api/sessions/%s", createdSess.ID), nil)
+	delRec := httptest.NewRecorder()
+	handler.ServeHTTP(delRec, delReq)
+
+	if delRec.Code != http.StatusOK {
+		t.Errorf("expected DELETE /api/sessions/{id} to return 200, got %d", delRec.Code)
+	}
+
+	// Subsequent GET should return 404
+	getAfterDel := httptest.NewRequest("GET", fmt.Sprintf("/api/sessions/%s", createdSess.ID), nil)
+	getAfterDelRec := httptest.NewRecorder()
+	handler.ServeHTTP(getAfterDelRec, getAfterDel)
+	if getAfterDelRec.Code != http.StatusNotFound {
+		t.Errorf("expected GET after DELETE to return 404, got %d", getAfterDelRec.Code)
+	}
 }

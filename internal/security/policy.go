@@ -1,6 +1,8 @@
 package security
 
 import (
+	"context"
+	"fmt"
 	"strings"
 )
 
@@ -27,6 +29,39 @@ func NewCommandPolicy(allowed, approvalReq, blocked []string) *CommandPolicy {
 		ApprovalRequiredCommands: approvalReq,
 		BlockedCommands:          blocked,
 	}
+}
+
+// EvaluateCommandWithContext evaluates command security with session awareness.
+func (p *CommandPolicy) EvaluateCommandWithContext(ctx context.Context, commandStr string) (PolicyLevel, string) {
+	cmd := strings.TrimSpace(commandStr)
+	if cmd == "" {
+		return PolicyBlocked, "Empty command is not allowed"
+	}
+
+	if sc, ok := SessionFromContext(ctx); ok && (sc.Type == "conversation" || sc.ReadOnly) {
+		lowerCmd := strings.ToLower(cmd)
+
+		// Check for mutating commands or redirection in conversation mode
+		mutatingPrefixes := []string{
+			"rm", "mv", "cp", "touch", "mkdir", "rmdir", "chmod", "chown", "chgrp",
+			"sed -i", "truncate", "dd", "mkfs", "nano", "vim", "vi", "emacs",
+			"git commit", "git push", "git checkout -b", "git branch -d", "git reset",
+			"git revert", "git merge", "git rebase", "git clean", "git stash pop",
+			"npm install", "npm i", "npm uninstall", "yarn add", "yarn remove", "pnpm add",
+			"pip install", "pip uninstall", "brew install", "brew uninstall",
+			"go install", "kill", "pkill", "killall", "shutdown", "reboot",
+		}
+		for _, mp := range mutatingPrefixes {
+			if lowerCmd == mp || strings.HasPrefix(lowerCmd, mp+" ") || containsPipeOrSubcommand(lowerCmd, mp) {
+				return PolicyBlocked, fmt.Sprintf("Command %q blocked: file modifications and mutating actions are not permitted in General Conversation mode. Open or create a Project to run mutating commands.", mp)
+			}
+		}
+		if strings.Contains(lowerCmd, " >") || strings.Contains(lowerCmd, " >>") || strings.HasPrefix(lowerCmd, ">") || strings.HasPrefix(lowerCmd, ">>") {
+			return PolicyBlocked, "Output redirection/writing to files is blocked in General Conversation mode"
+		}
+	}
+
+	return p.EvaluateCommand(commandStr)
 }
 
 // EvaluateCommand inspects a shell command and returns its security classification.

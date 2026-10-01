@@ -19,7 +19,7 @@ import (
 const BobSystemPrompt = `You are Bob, a local personal computer agent running on the user’s Mac. Your job is to help the user accomplish tasks by reasoning about requests and using authorized tools on the computer.
 
 You have access to the following authorized tools on the Mac:
-- find_project(name): Locates a project or repository directory across authorized workspaces (e.g. ~/Projects, ~/Documents). Use this when given a project, app, or folder name (e.g. "verxa", "jeroidpay"). It performs fuzzy/partial matching and finds similar project names (e.g. "verxa" -> "verxa-backend").
+- find_project(name): Locates a project or repository directory across authorized workspaces (e.g. ~/Projects, ~/Documents). Use this when given a project, app, or folder name (e.g. "verxa", "jeroidpay", "bob-ai"). It performs fuzzy/partial matching and returns real absolute paths.
 - terminal_exec(command, work_dir, timeout_seconds): Executes shell commands (e.g. pwd, ls -la, git status, go test).
 - read_file(path, start_line, end_line): Reads file contents.
 - write_file(path, content): Creates or updates files.
@@ -27,16 +27,14 @@ You have access to the following authorized tools on the Mac:
 - search_files(directory, name_pattern, text_query, include_hidden, max_results): Searches for files or text contents within an authorized directory, including hidden files by default.
 - take_screenshot(label): Captures the macOS display.
 
-INSTRUCTIONS:
-1. When asked about a project or repository by name (e.g. "verxa", "jeroidpay", "server"), do NOT guess fake paths like "/path/to/...". Always use find_project(name) or list_directory("~/Projects") first.
-2. If find_project returns a match or close suggestions (e.g. searching "verxa" returns "verxa-backend"), proceed to inspect that project (e.g. running "git status" in that work_dir or listing files). If there are multiple different candidates (e.g. "verxa-backend" and "verxa-frontend"), present the matching projects and ask the user to confirm which one to inspect.
-3. When asked to list all files in a project or directory, or to inspect a project workspace:
-   - Always use list_directory to inspect the workspace.
-   - Show ALL files and subdirectories, including hidden files and dotfiles (e.g. .env, .gitignore, .github, .vscode, .agents) unless the user explicitly requests to exclude hidden files.
-   - Present the project workspace directory tree in a clean, visually pleasing, structured format. No files should be left out.
+CRITICAL RULES:
+1. NEVER GUESS OR HALLUCINATE FILE/DIRECTORY CONTENTS: You have NO built-in memory of the user's filesystem or what files exist in any project. You must NEVER fabricate or assume file or folder names (such as "app/", "routes/", "models/", "migrations/", "Dockerfile", etc.).
+2. MANDATORY TOOL INVOCATION: Any user request asking to list, check, inspect, count, or display files, folders, or project structures MUST ALWAYS trigger tool execution first:
+   - Step 1: Call find_project(name) or use the target directory path.
+   - Step 2: Call list_directory(path) to read the real disk contents.
+3. EXACT DISK REPORTING: Only output the actual files and directories returned by list_directory. Present the project tree in a clean, visually pleasing, structured format.
 4. When asked to perform actions on the computer (inspecting files, running commands, checking git status, taking screenshots), you MUST invoke the appropriate tool.
-5. Do NOT simply output code snippets or descriptions of commands unless asked. Execute them.
-6. Be concise and action-oriented. Inspect first, execute, and report findings.`
+5. Be concise and action-oriented. Inspect first with tools, execute, and report real findings.`
 
 type EventListener func(event Event)
 
@@ -81,6 +79,11 @@ func NewAgent(
 		tasks:          make(map[string]*Task),
 		listeners:      make([]EventListener, 0),
 	}
+}
+
+// SessionManager returns the session manager instance.
+func (a *Agent) SessionManager() *sessions.Manager {
+	return a.sessionManager
 }
 
 // AddEventListener registers a subscriber for real-time task events.
@@ -282,6 +285,16 @@ func (a *Agent) Run(parentCtx context.Context, task *Task) {
 func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 	session := a.sessionManager.GetOrCreate(task.SessionID)
 
+	// Build session security context
+	sc := security.SessionContext{
+		SessionID:   session.ID,
+		Type:        string(session.Type),
+		ProjectPath: session.ProjectPath,
+		ProjectName: session.ProjectName,
+		ReadOnly:    (session.Type == sessions.SessionTypeConversation),
+	}
+	ctx = security.ContextWithSession(ctx, sc)
+
 	// Append user prompt to session
 	userMsg := llm.Message{
 		Role:    llm.RoleUser,
@@ -289,11 +302,31 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 	}
 	a.sessionManager.AppendMessage(task.SessionID, userMsg)
 
+	// Mode-specific system prompt enrichment
+	systemPrompt := BobSystemPrompt
+	if session.Type == sessions.SessionTypeProject && session.ProjectPath != "" {
+		projInfo := ""
+		if session.ProjectID != "" {
+			if proj, ok := a.sessionManager.GetProject(session.ProjectID); ok {
+				if len(proj.TechStack) > 0 {
+					projInfo += fmt.Sprintf("\nDetected Tech Stack: %s", strings.Join(proj.TechStack, ", "))
+				}
+				if proj.Summary != "" {
+					projInfo += fmt.Sprintf("\nProject Overview: %s", proj.Summary)
+				}
+			}
+		}
+
+		systemPrompt += fmt.Sprintf("\n\nACTIVE WORKSPACE MODE: Project Mode\nProject Name: %s\nProject Root Path: %s%s\nAll file operations (read, write, search, directory listing) and terminal executions are strictly scoped to this project folder (%s). Do not attempt to access files outside this workspace.\nWhen the user asks about this project, its architecture, structure, or code, use list_directory and read_file to inspect the real files and provide an insightful, structured explanation.", session.ProjectName, session.ProjectPath, projInfo, session.ProjectPath)
+	} else {
+		systemPrompt += "\n\nACTIVE WORKSPACE MODE: General Mac Assistant (Read-Only Conversation Mode)\nYou can inspect the user's computer, search files, read documents, run diagnostic shell commands, and take screenshots to report information. However, you MUST NOT modify, create, or delete any files, or execute mutating commands on the PC."
+	}
+
 	// Build working message history
 	messages := make([]llm.Message, 0, len(session.Messages)+2)
 	messages = append(messages, llm.Message{
 		Role:    llm.RoleSystem,
-		Content: BobSystemPrompt,
+		Content: systemPrompt,
 	})
 	messages = append(messages, session.Messages...)
 
@@ -408,7 +441,7 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 					Command string `json:"command"`
 				}
 				_ = json.Unmarshal(rawArgs, &in)
-				level, reason := a.policy.EvaluateCommand(in.Command)
+				level, reason := a.policy.EvaluateCommandWithContext(ctx, in.Command)
 
 				if level == security.PolicyBlocked {
 					errOut := fmt.Sprintf("Command blocked by security policy: %s", reason)

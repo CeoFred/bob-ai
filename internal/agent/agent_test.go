@@ -145,7 +145,7 @@ func TestAgent_MaxStepEnforcement(t *testing.T) {
 }
 
 func TestAgent_TaskCancellation(t *testing.T) {
-	toolCallArgs, _ := json.Marshal(map[string]any{"command": "rm file.txt"}) // requires approval
+	toolCallArgs, _ := json.Marshal(map[string]any{"command": "rm file.txt"}) // requires approval in project mode
 	approvalResp := llm.ChatResponse{
 		Message: llm.Message{
 			Role: llm.RoleAssistant,
@@ -162,8 +162,9 @@ func TestAgent_TaskCancellation(t *testing.T) {
 		},
 	}
 
-	ag, _, _, _ := setupTestAgent(t, approvalResp)
-	task := ag.CreateTask("", "Delete file")
+	ag, _, _, tempDir := setupTestAgent(t, approvalResp)
+	sess := ag.SessionManager().Create(sessions.SessionTypeProject, tempDir, "TestProject")
+	task := ag.CreateTask(sess.ID, "Delete file")
 
 	ag.Run(context.Background(), task)
 
@@ -182,6 +183,56 @@ func TestAgent_TaskCancellation(t *testing.T) {
 	tObj, _ = ag.GetTask(task.ID)
 	if tObj.Status != agent.StatusCancelled {
 		t.Errorf("expected cancelled status, got %s", tObj.Status)
+	}
+}
+
+func TestAgent_ConversationMode_BlocksMutatingCommands(t *testing.T) {
+	toolCallArgs, _ := json.Marshal(map[string]any{"command": "rm file.txt"})
+	step1 := llm.ChatResponse{
+		Message: llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "call_rm",
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      "terminal_exec",
+						Arguments: toolCallArgs,
+					},
+				},
+			},
+		},
+	}
+	step2 := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "I cannot delete files in conversation mode.",
+		},
+		FinishReason: "stop",
+	}
+
+	ag, _, _, _ := setupTestAgent(t, step1, step2)
+	sess := ag.SessionManager().Create(sessions.SessionTypeConversation, "", "General Chat")
+	task := ag.CreateTask(sess.ID, "Delete file")
+
+	ag.Run(context.Background(), task)
+
+	time.Sleep(150 * time.Millisecond)
+
+	tObj, _ := ag.GetTask(task.ID)
+	if tObj.Status != agent.StatusCompleted {
+		t.Fatalf("expected task completed, got %s (error: %s)", tObj.Status, tObj.Error)
+	}
+
+	// Verify blocked event was emitted
+	foundBlocked := false
+	for _, ev := range tObj.Events {
+		if ev.Type == agent.EventToolStarted && ev.Tool == "terminal_exec" {
+			foundBlocked = true
+		}
+	}
+	if !foundBlocked {
+		t.Errorf("expected terminal_exec tool attempt recorded")
 	}
 }
 

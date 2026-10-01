@@ -56,8 +56,8 @@ func NewServer(
 	return s
 }
 
-// Start launches the HTTP and WebSocket server.
-func (s *Server) Start() error {
+// Handler returns the configured HTTP handler with all routes and auth middleware.
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// Public Health Endpoint
@@ -68,6 +68,14 @@ func (s *Server) Start() error {
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
+	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
+	mux.HandleFunc("GET /api/projects", s.handleListProjects)
+	mux.HandleFunc("POST /api/projects", s.handleCreateOrOpenProject)
+	mux.HandleFunc("GET /api/projects/{id}", s.handleGetProject)
+	mux.HandleFunc("DELETE /api/projects/{id}", s.handleDeleteProject)
+	mux.HandleFunc("POST /api/projects/{id}/sessions", s.handleCreateProjectSession)
+	mux.HandleFunc("GET /api/filesystem/browse", s.handleBrowseFilesystem)
+	mux.HandleFunc("GET /api/filesystem/recent-projects", s.handleRecentProjects)
 	mux.HandleFunc("POST /api/tasks", s.handleCreateTask)
 	mux.HandleFunc("GET /api/tasks", s.handleListTasks)
 	mux.HandleFunc("GET /api/tasks/{id}", s.handleGetTask)
@@ -86,8 +94,13 @@ func (s *Server) Start() error {
 	// Static Assets & UI Handler
 	mux.HandleFunc("/", s.handleStaticOrSPA)
 
+	return AuthMiddleware(s.cfg.Server.APIToken, mux)
+}
+
+// Start launches the HTTP and WebSocket server.
+func (s *Server) Start() error {
 	addr := fmt.Sprintf("%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
-	handler := AuthMiddleware(s.cfg.Server.APIToken, mux)
+	handler := s.Handler()
 
 	s.httpServer = &http.Server{
 		Addr:         addr,
@@ -146,13 +159,46 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+type CreateSessionRequest struct {
+	ID          string               `json:"id,omitempty"`
+	Type        sessions.SessionType `json:"type,omitempty"`
+	ProjectPath string               `json:"project_path,omitempty"`
+	Title       string               `json:"title,omitempty"`
+}
+
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		ID string `json:"id"`
-	}
+	var in CreateSessionRequest
 	_ = json.NewDecoder(r.Body).Decode(&in)
 
-	sess := s.sessionManager.GetOrCreate(in.ID)
+	if in.Type == sessions.SessionTypeProject || in.ProjectPath != "" {
+		if strings.TrimSpace(in.ProjectPath) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project_path is required for project sessions"})
+			return
+		}
+
+		expanded := in.ProjectPath
+		if strings.HasPrefix(expanded, "~") {
+			home, _ := os.UserHomeDir()
+			expanded = filepath.Join(home, strings.TrimPrefix(expanded, "~"))
+		}
+
+		absPath, err := filepath.Abs(expanded)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid project_path"})
+			return
+		}
+		stat, err := os.Stat(absPath)
+		if err != nil || !stat.IsDir() {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("project directory not found: %s", absPath)})
+			return
+		}
+		in.ProjectPath = absPath
+		in.Type = sessions.SessionTypeProject
+	} else {
+		in.Type = sessions.SessionTypeConversation
+	}
+
+	sess := s.sessionManager.GetOrCreateWithOptions(in.ID, in.Type, in.ProjectPath, in.Title)
 	writeJSON(w, http.StatusCreated, sess)
 }
 
@@ -180,6 +226,118 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		"session": sess,
 		"tasks":   sessionTasks,
 	})
+}
+
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if ok := s.sessionManager.Delete(id); !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
+}
+
+func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if ok := s.sessionManager.DeleteProject(id); !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
+}
+
+func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	projs := s.sessionManager.ListProjects()
+	writeJSON(w, http.StatusOK, projs)
+}
+
+type CreateProjectRequest struct {
+	Path string `json:"path"`
+	Name string `json:"name,omitempty"`
+}
+
+func (s *Server) handleCreateOrOpenProject(w http.ResponseWriter, r *http.Request) {
+	var req CreateProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json payload"})
+		return
+	}
+
+	trimmed := strings.TrimSpace(req.Path)
+	if trimmed == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path is required"})
+		return
+	}
+
+	expanded := trimmed
+	if strings.HasPrefix(expanded, "~") {
+		home, _ := os.UserHomeDir()
+		expanded = filepath.Join(home, strings.TrimPrefix(expanded, "~"))
+	}
+
+	absPath, err := filepath.Abs(expanded)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
+		return
+	}
+
+	stat, err := os.Stat(absPath)
+	if err != nil || !stat.IsDir() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("directory not found: %s", absPath)})
+		return
+	}
+
+	name := req.Name
+	if name == "" {
+		name = filepath.Base(absPath)
+	}
+
+	proj := s.sessionManager.GetOrCreateProject(absPath, name)
+
+	// Create initial session for this project if none exist
+	var initialSession *sessions.Session
+	projsWithSess := s.sessionManager.ListProjects()
+	for _, p := range projsWithSess {
+		if p.ID == proj.ID {
+			if len(p.Sessions) > 0 {
+				initialSession = p.Sessions[0]
+			}
+			break
+		}
+	}
+	if initialSession == nil {
+		initialSession, _ = s.sessionManager.CreateProjectSession(proj.ID, "General Discussion")
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"project": proj,
+		"session": initialSession,
+	})
+}
+
+func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	proj, ok := s.sessionManager.GetProject(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, proj)
+}
+
+func (s *Server) handleCreateProjectSession(w http.ResponseWriter, r *http.Request) {
+	projID := r.PathValue("id")
+	var req struct {
+		Title string `json:"title"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	sess, err := s.sessionManager.CreateProjectSession(projID, req.Title)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, sess)
 }
 
 type CreateTaskRequest struct {
@@ -344,6 +502,145 @@ func (s *Server) handleCodingExecute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, res)
+}
+
+type BrowseItem struct {
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	IsProject bool   `json:"is_project"`
+}
+
+type BrowseResponse struct {
+	CurrentPath string       `json:"current_path"`
+	ParentPath  string       `json:"parent_path"`
+	Directories []BrowseItem `json:"directories"`
+}
+
+func (s *Server) handleBrowseFilesystem(w http.ResponseWriter, r *http.Request) {
+	reqPath := r.URL.Query().Get("path")
+	if strings.TrimSpace(reqPath) == "" {
+		home, _ := os.UserHomeDir()
+		reqPath = home
+	} else {
+		if strings.HasPrefix(reqPath, "~") {
+			home, _ := os.UserHomeDir()
+			reqPath = filepath.Join(home, strings.TrimPrefix(reqPath, "~"))
+		}
+	}
+
+	absPath, err := filepath.Abs(reqPath)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
+		return
+	}
+
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("cannot read directory: %v", err)})
+		return
+	}
+
+	var dirs []BrowseItem
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		full := filepath.Join(absPath, name)
+		isProj := checkIsProjectDir(full)
+		dirs = append(dirs, BrowseItem{
+			Name:      name,
+			Path:      full,
+			IsProject: isProj,
+		})
+	}
+
+	parent := filepath.Dir(absPath)
+	if parent == absPath {
+		parent = ""
+	}
+
+	writeJSON(w, http.StatusOK, BrowseResponse{
+		CurrentPath: absPath,
+		ParentPath:  parent,
+		Directories: dirs,
+	})
+}
+
+type ProjectSummary struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+func (s *Server) handleRecentProjects(w http.ResponseWriter, r *http.Request) {
+	home, _ := os.UserHomeDir()
+	candidateDirs := []string{
+		filepath.Join(home, "Projects"),
+		filepath.Join(home, "Documents"),
+		filepath.Join(home, "Desktop"),
+		filepath.Join(home, "src"),
+		filepath.Join(home, "code"),
+		filepath.Join(home, "Work"),
+		filepath.Join(home, "Developer"),
+	}
+
+	var projects []ProjectSummary
+	seen := make(map[string]bool)
+
+	for _, cand := range candidateDirs {
+		entries, err := os.ReadDir(cand)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			full := filepath.Join(cand, e.Name())
+			if seen[full] {
+				continue
+			}
+			if checkIsProjectDir(full) {
+				seen[full] = true
+				projects = append(projects, ProjectSummary{
+					Name: e.Name(),
+					Path: full,
+				})
+			}
+		}
+	}
+
+	// Also add projects from existing sessions
+	for _, sess := range s.sessionManager.List() {
+		if sess.Type == sessions.SessionTypeProject && sess.ProjectPath != "" && !seen[sess.ProjectPath] {
+			if info, err := os.Stat(sess.ProjectPath); err == nil && info.IsDir() {
+				seen[sess.ProjectPath] = true
+				name := sess.ProjectName
+				if name == "" {
+					name = filepath.Base(sess.ProjectPath)
+				}
+				projects = append([]ProjectSummary{{Name: name, Path: sess.ProjectPath}}, projects...)
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, projects)
+}
+
+func checkIsProjectDir(dir string) bool {
+	indicators := []string{
+		".git", "package.json", "go.mod", "Cargo.toml", "pyproject.toml",
+		"requirements.txt", "Makefile", "pom.xml", "build.gradle", "composer.json",
+	}
+	for _, ind := range indicators {
+		if _, err := os.Stat(filepath.Join(dir, ind)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleStaticOrSPA(w http.ResponseWriter, r *http.Request) {

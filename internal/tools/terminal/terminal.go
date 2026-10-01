@@ -103,7 +103,7 @@ func (t *TerminalTool) Execute(ctx context.Context, rawInput json.RawMessage) (r
 	}
 
 	// 1. Policy check
-	level, reason := t.policy.EvaluateCommand(commandStr)
+	level, reason := t.policy.EvaluateCommandWithContext(ctx, commandStr)
 	if level == security.PolicyBlocked {
 		return registry.ToolResult{
 			Success: false,
@@ -113,8 +113,12 @@ func (t *TerminalTool) Execute(ctx context.Context, rawInput json.RawMessage) (r
 
 	// 2. Working Directory validation
 	workDir := t.defaultWorkDir
+	if sc, ok := security.SessionFromContext(ctx); ok && sc.ProjectPath != "" {
+		workDir = sc.ProjectPath
+	}
+
 	if in.WorkDir != "" {
-		validDir, err := t.pathValidator.ValidatePath(in.WorkDir)
+		validDir, err := t.pathValidator.ValidatePathWithContext(ctx, in.WorkDir)
 		if err != nil {
 			return registry.ToolResult{
 				Success: false,

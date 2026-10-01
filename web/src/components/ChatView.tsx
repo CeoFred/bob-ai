@@ -1,30 +1,38 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Task, AgentEvent } from '../types';
+import { Task, AgentEvent, Session, Project } from '../types';
 import { ToolActivity } from './ToolActivity';
 import { ApprovalBanner } from './ApprovalBanner';
 import { Button } from './ui/button';
-import { ArrowUp, Square, Sparkles, Terminal, Camera, FolderSearch, Loader2, Bot } from 'lucide-react';
+import { ArrowUp, Square, Sparkles, Terminal, Camera, FolderSearch, Loader2, Bot, FolderGit2, ShieldCheck, FolderPlus } from 'lucide-react';
 
 interface ChatViewProps {
   currentTask: Task | null;
   events: AgentEvent[];
+  session?: Session | null;
+  project?: Project | null;
   onSend: (prompt: string) => void;
   onCancel: (taskId: string) => void;
   onApprove: (taskId: string, approved: boolean) => void;
   onViewScreenshot: (url: string) => void;
+  onOpenProjectModal?: () => void;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
   currentTask,
   events,
+  session,
+  project,
   onSend,
   onCancel,
   onApprove,
   onViewScreenshot,
+  onOpenProjectModal,
 }) => {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const isProjectMode = session?.type === 'project';
 
   const isRunning =
     currentTask !== null &&
@@ -78,17 +86,58 @@ export const ChatView: React.FC<ChatViewProps> = ({
       <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6">
         {events.length === 0 && !currentTask ? (
           /* Claude-style Landing View */
-          <div className="h-full flex flex-col items-center justify-center max-w-2xl mx-auto space-y-8 animate-fadeIn">
+          <div className="h-full flex flex-col items-center justify-center max-w-2xl mx-auto space-y-6 animate-fadeIn">
             <div className="text-center space-y-2">
-              <h1 className="text-3xl font-medium tracking-tight text-zinc-100">
-                {getGreeting()}
-              </h1>
-              <p className="text-sm text-zinc-500">
-                How can Bob help you on your Mac today?
-              </p>
+              {isProjectMode ? (
+                <>
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-950/60 border border-blue-800/40 text-blue-300 text-xs font-medium mb-1">
+                    <FolderGit2 className="w-3.5 h-3.5" />
+                    <span>Project Workspace</span>
+                  </div>
+                  <h1 className="text-3xl font-medium tracking-tight text-zinc-100">
+                    {project?.name || session?.project_name || 'Project Workspace'}
+                  </h1>
+                  <p className="text-xs text-zinc-400 font-mono">
+                    {project?.path || session?.project_path}
+                  </p>
+
+                  {/* Tech stack badges */}
+                  {project?.tech_stack && project.tech_stack.length > 0 && (
+                    <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+                      {project.tech_stack.map((tech) => (
+                        <span
+                          key={tech}
+                          className="px-2 py-0.5 rounded-md bg-zinc-800/90 border border-zinc-700/60 text-zinc-300 text-[11px] font-medium"
+                        >
+                          {tech}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {project?.summary && (
+                    <p className="text-xs text-zinc-400 max-w-lg mx-auto leading-relaxed pt-1">
+                      {project.summary}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-emerald-400 text-xs font-medium mb-1">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>General Mac Assistant (Read-Only)</span>
+                  </div>
+                  <h1 className="text-3xl font-medium tracking-tight text-zinc-100">
+                    {getGreeting()}
+                  </h1>
+                  <p className="text-sm text-zinc-500">
+                    How can Bob help you on your Mac today? Cannot modify PC files.
+                  </p>
+                </>
+              )}
             </div>
 
-            {/* Central Claude-style prompt input */}
+            {/* Central prompt input */}
             <div className="w-full">
               <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/60 focus-within:border-zinc-700/90 focus-within:bg-zinc-900 shadow-xl transition-all p-3">
                 <textarea
@@ -96,7 +145,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Ask Bob to run tasks, check files, or execute commands..."
+                  placeholder={
+                    isProjectMode
+                      ? `Ask Bob about this project, search code, run tests, or edit files...`
+                      : 'Ask Bob to find info on your PC, take screenshots, or run diagnostics...'
+                  }
                   rows={2}
                   className="w-full bg-transparent text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none px-2 py-1 leading-relaxed max-h-48"
                 />
@@ -119,37 +172,61 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {/* Quick suggestion pills */}
               <div className="flex flex-wrap items-center justify-center gap-2 pt-4">
-                <button
-                  onClick={() => onSend('Run git status and check the repository status')}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
-                >
-                  <Terminal className="w-3.5 h-3.5 text-zinc-500" />
-                  <span>Inspect git status</span>
-                </button>
+                {isProjectMode ? (
+                  <>
+                    <button
+                      onClick={() => onSend('Tell me about this project, its purpose, tech stack, and architecture')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-blue-900/50 bg-blue-950/30 hover:bg-blue-900/40 text-xs text-blue-300 hover:text-blue-100 transition-colors"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Tell me about this project</span>
+                    </button>
 
-                <button
-                  onClick={() => onSend('Take a screenshot of the Mac desktop')}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
-                >
-                  <Camera className="w-3.5 h-3.5 text-zinc-500" />
-                  <span>Capture desktop screenshot</span>
-                </button>
+                    <button
+                      onClick={() => onSend('List all project files and explain the directory structure')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                    >
+                      <FolderSearch className="w-3.5 h-3.5 text-zinc-500" />
+                      <span>List directory tree</span>
+                    </button>
 
-                <button
-                  onClick={() => onSend('List all files in the current workspace directory')}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
-                >
-                  <FolderSearch className="w-3.5 h-3.5 text-zinc-500" />
-                  <span>List workspace files</span>
-                </button>
+                    <button
+                      onClick={() => onSend('Inspect git status and recent commits')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                    >
+                      <Terminal className="w-3.5 h-3.5 text-zinc-500" />
+                      <span>Inspect git status</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => onSend('Take a screenshot of the Mac desktop')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                    >
+                      <Camera className="w-3.5 h-3.5 text-zinc-500" />
+                      <span>Capture desktop screenshot</span>
+                    </button>
 
-                <button
-                  onClick={() => onSend('Tell me what directory Bob is running from and list the files')}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-zinc-500" />
-                  <span>Test acceptance task</span>
-                </button>
+                    <button
+                      onClick={() => onSend('Inspect Mac system information, memory, and disk usage')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-850 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                    >
+                      <Terminal className="w-3.5 h-3.5 text-zinc-500" />
+                      <span>Mac System Info</span>
+                    </button>
+
+                    {onOpenProjectModal && (
+                      <button
+                        onClick={onOpenProjectModal}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-blue-900/50 bg-blue-950/30 hover:bg-blue-900/40 text-xs text-blue-300 hover:text-blue-100 transition-colors"
+                      >
+                        <FolderPlus className="w-3.5 h-3.5 text-blue-400" />
+                        <span>Open a Project Folder</span>
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           </div>
