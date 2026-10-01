@@ -100,6 +100,14 @@ func TestPathValidator_SmartProjectResolution(t *testing.T) {
 	jeroidpayServer := filepath.Join(projectsDir, "jeroidpay", "server")
 	_ = os.MkdirAll(jeroidpayServer, 0755)
 
+	verxaBackend := filepath.Join(projectsDir, "verxa-backend")
+	_ = os.MkdirAll(verxaBackend, 0755)
+	_ = os.WriteFile(filepath.Join(verxaBackend, "go.mod"), []byte("module verxa-backend"), 0644)
+
+	verxaFrontend := filepath.Join(projectsDir, "verxa-frontend")
+	_ = os.MkdirAll(verxaFrontend, 0755)
+	_ = os.WriteFile(filepath.Join(verxaFrontend, "package.json"), []byte("{}"), 0644)
+
 	validator := security.NewPathValidator([]string{projectsDir})
 
 	// 1. Placeholder path resolution: /path/to/jeroidpay/server -> resolves to projectsDir/jeroidpay/server
@@ -122,5 +130,24 @@ func TestPathValidator_SmartProjectResolution(t *testing.T) {
 	if resolvedRoot != realRoot {
 		t.Errorf("got resolved root %s, want %s", resolvedRoot, realRoot)
 	}
+
+	// 3. Fuzzy prefix matching: "verxa" -> matches verxa-backend and verxa-frontend
+	matches := validator.FindMatchingPaths("verxa")
+	if len(matches) < 2 {
+		t.Fatalf("expected at least 2 matches for 'verxa', got %d: %v", len(matches), matches)
+	}
+
+	// 4. Conversational query: "verxa project" -> matches verxa-backend
+	matchesProj := validator.FindMatchingPaths("verxa project")
+	if len(matchesProj) < 2 {
+		t.Fatalf("expected matches for 'verxa project', got %d: %v", len(matchesProj), matchesProj)
+	}
+
+	// 5. Typo tolerance: "vexra" -> matches verxa-backend
+	matchesTypo := validator.FindMatchingPaths("vexra")
+	if len(matchesTypo) == 0 {
+		t.Fatalf("expected typo match for 'vexra', got 0 matches")
+	}
 }
+
 
