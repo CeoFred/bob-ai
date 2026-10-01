@@ -53,6 +53,24 @@ export const ToolActivity: React.FC<ToolActivityProps> = ({ event, onViewScreens
 
   const outputText = event.output || event.error || (event.tool_result ? JSON.stringify(event.tool_result, null, 2) : '');
 
+  // Resolve screenshot URL from tool_result data or output filename
+  const getScreenshotUrl = (): string | null => {
+    if (event.tool_result?.data?.url) {
+      return event.tool_result.data.url;
+    }
+    if (event.tool_result?.data?.base64_data) {
+      return `data:image/png;base64,${event.tool_result.data.base64_data}`;
+    }
+    const str = `${event.output || ''} ${event.message || ''}`;
+    const match = str.match(/screenshot_[\w-]+\.png/);
+    if (match) {
+      return `/api/screenshots/${match[0]}`;
+    }
+    return null;
+  };
+
+  const screenshotUrl = getScreenshotUrl();
+
   return (
     <div className="my-2 rounded-xl border border-zinc-800/80 bg-zinc-900/40 overflow-hidden text-xs transition-colors hover:border-zinc-700/80">
       {/* Header bar */}
@@ -100,6 +118,37 @@ export const ToolActivity: React.FC<ToolActivityProps> = ({ event, onViewScreens
           )}
         </div>
       </div>
+
+      {/* Prominent inline visual preview for screenshot captures */}
+      {isCompleted && screenshotUrl && !isFailed && (
+        <div className="p-3 bg-zinc-950/50 border-t border-zinc-800/60 space-y-2">
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewScreenshot && onViewScreenshot(screenshotUrl);
+            }}
+            className="relative group cursor-pointer rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 max-w-md hover:border-zinc-600 transition-all shadow-md"
+          >
+            <img
+              src={screenshotUrl}
+              alt="Screen capture preview"
+              className="w-full h-auto object-cover max-h-60 sm:max-h-72"
+            />
+            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-xs font-sans font-medium transition-opacity gap-1.5 backdrop-blur-[1px]">
+              <Maximize2 className="w-4 h-4" />
+              <span>Click to view full screen</span>
+            </div>
+          </div>
+          {event.tool_result?.data?.filename && (
+            <div className="flex items-center justify-between text-[10px] sm:text-[11px] text-zinc-500 font-mono px-0.5">
+              <span className="truncate">{event.tool_result.data.filename}</span>
+              {event.tool_result.data.size_bytes ? (
+                <span className="flex-shrink-0">{(event.tool_result.data.size_bytes / 1024).toFixed(1)} KB</span>
+              ) : null}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Expanded body */}
       {expanded && (
@@ -149,28 +198,6 @@ export const ToolActivity: React.FC<ToolActivityProps> = ({ event, onViewScreens
               >
                 {outputText}
               </pre>
-            </div>
-          )}
-
-          {event.tool_result?.data?.url && (
-            <div className="space-y-1.5 pt-1">
-              <div className="text-[10px] uppercase font-sans font-semibold text-zinc-500 tracking-wider">
-                Screenshot
-              </div>
-              <div
-                onClick={() => onViewScreenshot && event.tool_result?.data?.url && onViewScreenshot(event.tool_result.data.url)}
-                className="relative group cursor-pointer rounded-xl overflow-hidden border border-zinc-800 max-w-sm hover:border-zinc-600 transition-colors"
-              >
-                <img
-                  src={event.tool_result.data.url}
-                  alt="Screenshot"
-                  className="w-full h-auto object-cover max-h-48"
-                />
-                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-xs font-sans font-medium transition-opacity gap-1.5">
-                  <Maximize2 className="w-3.5 h-3.5" />
-                  <span>Expand preview</span>
-                </div>
-              </div>
             </div>
           )}
         </div>

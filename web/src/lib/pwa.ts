@@ -1,9 +1,13 @@
-// Service Worker and PWA Installation Utility
+// Service Worker and PWA Auto-Update Utility
 
 type PWAInstallListener = (canInstall: boolean) => void;
+type PWAUpdateListener = () => void;
 
 let deferredInstallPrompt: any = null;
 const installListeners = new Set<PWAInstallListener>();
+const updateListeners = new Set<PWAUpdateListener>();
+
+let refreshing = false;
 
 export function registerServiceWorker() {
   if (typeof window !== 'undefined' && 'serviceWorker' in navigator && (import.meta as any).env?.MODE !== 'test') {
@@ -11,18 +15,38 @@ export function registerServiceWorker() {
       navigator.serviceWorker
         .register('/sw.js')
         .then((reg) => {
-          console.log('[PWA] Service Worker registered with scope:', reg.scope);
+          console.log('[PWA] Service Worker registered:', reg.scope);
 
-          // Check for SW updates
+          // 1. Immediately check for update
+          reg.update().catch(() => {});
+
+          // 2. Check for updates whenever user returns to the app / refocuses
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+              reg.update().catch(() => {});
+            }
+          });
+
+          window.addEventListener('focus', () => {
+            reg.update().catch(() => {});
+          });
+
+          // 3. Periodic check every 5 minutes
+          setInterval(() => {
+            reg.update().catch(() => {});
+          }, 5 * 60 * 1000);
+
+          // 4. Handle newly found worker
           reg.onupdatefound = () => {
             const installingWorker = reg.installing;
             if (installingWorker) {
               installingWorker.onstatechange = () => {
                 if (installingWorker.state === 'installed') {
                   if (navigator.serviceWorker.controller) {
-                    console.log('[PWA] New content is available; please refresh.');
+                    console.log('[PWA] New version installed and ready.');
+                    notifyUpdateListeners();
                   } else {
-                    console.log('[PWA] Content is cached for offline use.');
+                    console.log('[PWA] App is cached for offline use.');
                   }
                 }
               };
@@ -30,8 +54,17 @@ export function registerServiceWorker() {
           };
         })
         .catch((err) => {
-          console.error('[PWA] Service Worker registration failed:', err);
+          console.error('[PWA] Service Worker registration error:', err);
         });
+
+      // 5. When the active service worker changes, reload seamlessly once
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!refreshing) {
+          refreshing = true;
+          console.log('[PWA] Controller changed; reloading with latest version.');
+          window.location.reload();
+        }
+      });
     });
 
     // Listen for the beforeinstallprompt event
@@ -46,7 +79,7 @@ export function registerServiceWorker() {
     window.addEventListener('appinstalled', () => {
       deferredInstallPrompt = null;
       notifyInstallListeners(false);
-      console.log('[PWA] App successfully installed');
+      console.log('[PWA] App successfully installed to home screen');
     });
   }
 }
@@ -89,6 +122,17 @@ export function onPWAInstallChange(listener: PWAInstallListener): () => void {
   };
 }
 
+export function onPWAUpdate(listener: PWAUpdateListener): () => void {
+  updateListeners.add(listener);
+  return () => {
+    updateListeners.delete(listener);
+  };
+}
+
 function notifyInstallListeners(canInstall: boolean) {
   installListeners.forEach((fn) => fn(canInstall));
+}
+
+function notifyUpdateListeners() {
+  updateListeners.forEach((fn) => fn());
 }

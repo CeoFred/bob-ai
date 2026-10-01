@@ -257,7 +257,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       <Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     </div>
                     <div className="flex-1 space-y-2 text-xs sm:text-sm leading-relaxed text-zinc-200 pt-0.5 min-w-0 break-words">
-                      <MarkdownRenderer content={ev.message || ''} />
+                      <MarkdownRenderer content={ev.message || ''} onImageClick={onViewScreenshot} />
                     </div>
                   </div>
                 );

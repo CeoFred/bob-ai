@@ -6,6 +6,7 @@ import { Copy, Check } from 'lucide-react';
 interface MarkdownRendererProps {
   content?: string;
   className?: string;
+  onImageClick?: (url: string) => void;
 }
 
 interface CodeBlockProps {
@@ -66,7 +67,7 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ inline, className, children }) =>
   );
 };
 
-export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content = '', className = '' }) => {
+export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content = '', className = '', onImageClick }) => {
   return (
     <div className={`markdown-content space-y-2 text-zinc-200 leading-relaxed ${className}`}>
       <ReactMarkdown
@@ -138,6 +139,25 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content = ''
               {children}
             </a>
           ),
+          img: ({ src, alt }: any) => {
+            if (!src) return null;
+            return (
+              <div className="my-2.5 rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 max-w-lg group relative shadow-md">
+                <img
+                  src={src}
+                  alt={alt || 'Image'}
+                  className="w-full h-auto object-cover max-h-72 cursor-pointer hover:opacity-95 transition-opacity"
+                  onClick={() => onImageClick?.(src)}
+                />
+                <div
+                  onClick={() => onImageClick?.(src)}
+                  className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-xs font-sans font-medium transition-opacity gap-1.5 cursor-pointer backdrop-blur-[1px]"
+                >
+                  <span>Click to view full screen</span>
+                </div>
+              </div>
+            );
+          },
           strong: ({ children }) => <strong className="font-semibold text-zinc-100">{children}</strong>,
           em: ({ children }) => <em className="italic text-zinc-300">{children}</em>,
           hr: () => <hr className="my-3.5 border-zinc-800" />,

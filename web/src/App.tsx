@@ -90,6 +90,50 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  // Periodically fetch new conversations & projects list and keep UI updated
+  useEffect(() => {
+    let isPolling = false;
+
+    const performPoll = async () => {
+      if (document.hidden || isPolling) return;
+      isPolling = true;
+      try {
+        const [projList, sessList] = await Promise.all([
+          fetchProjects().catch(() => null),
+          fetchSessions().catch(() => null),
+        ]);
+        if (projList) setProjects(projList);
+        if (sessList) setSessions(sessList);
+      } catch (err) {
+        console.error('Periodic conversation list refresh failed:', err);
+      } finally {
+        isPolling = false;
+      }
+    };
+
+    // Poll every 3.5 seconds
+    const intervalId = setInterval(performPoll, 3500);
+
+    // Immediate refresh on tab visibility change or window focus
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        performPoll();
+      }
+    };
+    const handleFocus = () => {
+      performPoll();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, []);
+
   const loadInitialData = async () => {
     await loadStatus();
     try {
@@ -118,9 +162,22 @@ export const App: React.FC = () => {
     }
   };
 
-  const refreshProjectsAndSessions = () => {
-    fetchProjects().then(setProjects).catch(() => {});
-    fetchSessions().then(setSessions).catch(() => {});
+  const isRefreshingRef = useRef(false);
+  const refreshProjectsAndSessions = async () => {
+    if (isRefreshingRef.current) return;
+    isRefreshingRef.current = true;
+    try {
+      const [projList, sessList] = await Promise.all([
+        fetchProjects().catch(() => null),
+        fetchSessions().catch(() => null),
+      ]);
+      if (projList) setProjects(projList);
+      if (sessList) setSessions(sessList);
+    } catch (e) {
+      console.error('Failed to refresh projects and sessions:', e);
+    } finally {
+      isRefreshingRef.current = false;
+    }
   };
 
   const selectSession = async (sessionId: string, updateUrl: boolean = true) => {
