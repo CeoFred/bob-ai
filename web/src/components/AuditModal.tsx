@@ -78,7 +78,7 @@ export const AuditModal: React.FC<AuditModalProps> = ({ onClose }) => {
             <Shield className="w-4 h-4 text-zinc-400" />
             <DialogTitle>Audit Trail</DialogTitle>
             <Badge variant="secondary" className="text-[10px]">
-              {logs.length} events
+              {logs.length}
             </Badge>
           </div>
 
@@ -87,10 +87,10 @@ export const AuditModal: React.FC<AuditModalProps> = ({ onClose }) => {
             size="sm"
             onClick={loadLogs}
             disabled={loading}
-            className="h-7 px-2 text-xs text-zinc-400 hover:text-zinc-100 gap-1.5"
+            className="h-7 px-2 text-xs text-zinc-400 hover:text-zinc-100 gap-1.5 cursor-pointer"
           >
             <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-            <span>Refresh</span>
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         </DialogHeader>
 
@@ -107,19 +107,19 @@ export const AuditModal: React.FC<AuditModalProps> = ({ onClose }) => {
         </div>
 
         {/* Log Entries */}
-        <div className="flex-1 overflow-y-auto space-y-1.5 max-h-[60vh] pr-1 py-1">
+        <div className="flex-1 overflow-y-auto space-y-2 max-h-[60vh] max-h-[60dvh] pr-1 py-1">
           {filteredLogs.length === 0 ? (
-            <div className="text-center py-12 text-zinc-500 text-xs">
+            <div className="text-center py-10 text-zinc-500 text-xs">
               {searchQuery ? 'No matching audit records' : 'No audit records logged yet.'}
             </div>
           ) : (
             filteredLogs.map((log, idx) => (
               <div
                 key={idx}
-                className="p-3 rounded-lg bg-zinc-900/60 border border-zinc-850 hover:border-zinc-750 text-xs font-mono space-y-1.5 transition-colors"
+                className="p-2.5 sm:p-3 rounded-lg bg-zinc-900/60 border border-zinc-850 hover:border-zinc-750 text-xs font-mono space-y-1.5 transition-colors"
               >
-                <div className="flex items-center justify-between text-[11px] text-zinc-400 font-sans">
-                  <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] text-zinc-400 font-sans">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-semibold text-zinc-200">
                       {log.action || (log.tool ? 'TOOL_EXEC' : 'EVENT')}
                     </span>
@@ -129,10 +129,10 @@ export const AuditModal: React.FC<AuditModalProps> = ({ onClose }) => {
                       </Badge>
                     )}
                     <span className="text-zinc-600">•</span>
-                    <span className="text-zinc-500">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                    <span className="text-zinc-500 text-[10px] sm:text-[11px]">{new Date(log.timestamp).toLocaleTimeString()}</span>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     {getStatusBadge(log)}
                     {log.duration_ms > 0 && (
                       <span className="flex items-center gap-1 text-zinc-500 text-[10px]">
@@ -144,21 +144,21 @@ export const AuditModal: React.FC<AuditModalProps> = ({ onClose }) => {
                 </div>
 
                 {log.input !== undefined && log.input !== '' && (
-                  <div className="text-zinc-300 text-[11px] break-all">
+                  <div className="text-zinc-300 text-[10px] sm:text-[11px] break-all">
                     <span className="text-zinc-500">Input: </span>
                     {typeof log.input === 'string' ? log.input : JSON.stringify(log.input)}
                   </div>
                 )}
 
                 {log.result !== undefined && log.result !== '' && (
-                  <div className="text-zinc-400 text-[11px] break-all">
+                  <div className="text-zinc-400 text-[10px] sm:text-[11px] break-all">
                     <span className="text-zinc-500">Result: </span>
                     {typeof log.result === 'string' ? log.result : JSON.stringify(log.result)}
                   </div>
                 )}
 
                 {log.error && (
-                  <div className="text-red-400 text-[11px] break-all">
+                  <div className="text-red-400 text-[10px] sm:text-[11px] break-all">
                     <span className="text-red-500">Error: </span>
                     {log.error}
                   </div>

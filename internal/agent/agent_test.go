@@ -186,6 +186,88 @@ func TestAgent_TaskCancellation(t *testing.T) {
 	}
 }
 
+func TestAgent_Approval_ApproveAndReject(t *testing.T) {
+	toolCallArgs, _ := json.Marshal(map[string]any{"command": "rm file.txt"})
+	step1 := llm.ChatResponse{
+		Message: llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "call_rm",
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      "terminal_exec",
+						Arguments: toolCallArgs,
+					},
+				},
+			},
+		},
+	}
+	step2 := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "Handled tool response",
+		},
+		FinishReason: "stop",
+	}
+
+	// 1. Test Reject
+	ag, _, _, tempDir := setupTestAgent(t, step1, step2)
+	sess := ag.SessionManager().Create(sessions.SessionTypeProject, tempDir, "TestProject")
+	taskReject := ag.CreateTask(sess.ID, "Delete file reject")
+
+	ag.Run(context.Background(), taskReject)
+	time.Sleep(50 * time.Millisecond)
+
+	tObj, _ := ag.GetTask(taskReject.ID)
+	if tObj.Status != agent.StatusWaitingForApproval {
+		t.Fatalf("expected waiting for approval, got %s", tObj.Status)
+	}
+
+	if err := ag.ApproveTool(taskReject.ID, false); err != nil {
+		t.Fatalf("ApproveTool(false) failed: %v", err)
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	tObj, _ = ag.GetTask(taskReject.ID)
+	if tObj.Status != agent.StatusCompleted {
+		t.Errorf("expected completed status after rejection, got %s", tObj.Status)
+	}
+
+	var foundRejectEvent bool
+	for _, ev := range tObj.Events {
+		if ev.Type == agent.EventToolCompleted && ev.Error == "User rejected command execution" {
+			foundRejectEvent = true
+		}
+	}
+	if !foundRejectEvent {
+		t.Errorf("expected tool completed event with rejection message")
+	}
+
+	// 2. Test Approve
+	ag2, _, _, tempDir2 := setupTestAgent(t, step1, step2)
+	sess2 := ag2.SessionManager().Create(sessions.SessionTypeProject, tempDir2, "TestProject")
+	taskApprove := ag2.CreateTask(sess2.ID, "Delete file approve")
+
+	ag2.Run(context.Background(), taskApprove)
+	time.Sleep(50 * time.Millisecond)
+
+	tObj2, _ := ag2.GetTask(taskApprove.ID)
+	if tObj2.Status != agent.StatusWaitingForApproval {
+		t.Fatalf("expected waiting for approval, got %s", tObj2.Status)
+	}
+
+	if err := ag2.ApproveTool(taskApprove.ID, true); err != nil {
+		t.Fatalf("ApproveTool(true) failed: %v", err)
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	tObj2, _ = ag2.GetTask(taskApprove.ID)
+	if tObj2.Status != agent.StatusCompleted {
+		t.Errorf("expected completed status after approval, got %s", tObj2.Status)
+	}
+}
+
 func TestAgent_ConversationMode_BlocksMutatingCommands(t *testing.T) {
 	toolCallArgs, _ := json.Marshal(map[string]any{"command": "rm file.txt"})
 	step1 := llm.ChatResponse{

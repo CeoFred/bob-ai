@@ -58,26 +58,26 @@ export const ToolActivity: React.FC<ToolActivityProps> = ({ event, onViewScreens
       {/* Header bar */}
       <div
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center justify-between px-3.5 py-2.5 cursor-pointer hover:bg-zinc-850/40 select-none transition-colors"
+        className="flex items-center justify-between px-3 sm:px-3.5 py-2.5 cursor-pointer hover:bg-zinc-850/40 select-none transition-colors"
       >
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="text-zinc-500">
+        <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 pr-2">
+          <div className="text-zinc-500 flex-shrink-0">
             {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           </div>
-          <div className="flex items-center gap-2 font-mono text-zinc-300">
+          <div className="flex items-center gap-1.5 sm:gap-2 font-mono text-zinc-300 flex-shrink-0">
             {getToolIcon(event.tool)}
             <span className="font-medium text-xs text-zinc-200">{event.tool || 'tool_exec'}</span>
           </div>
           {typeof event.input === 'string' && (
-            <span className="text-zinc-500 font-mono text-[11px] truncate max-w-[200px] sm:max-w-[320px]">
+            <span className="text-zinc-500 font-mono text-[10px] sm:text-[11px] truncate max-w-[100px] xs:max-w-[180px] sm:max-w-[320px]">
               {event.input}
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-3 flex-shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
           {event.duration_ms !== undefined && (
-            <span className="text-[11px] text-zinc-500 font-mono flex items-center gap-1">
+            <span className="text-[10px] sm:text-[11px] text-zinc-500 font-mono flex items-center gap-1 hidden xs:inline-flex">
               <Clock className="w-3 h-3 text-zinc-600" />
               {event.duration_ms}ms
             </span>
@@ -85,16 +85,16 @@ export const ToolActivity: React.FC<ToolActivityProps> = ({ event, onViewScreens
 
           {isCompleted ? (
             isFailed ? (
-              <span className="inline-flex items-center gap-1 text-[11px] text-red-400">
-                <AlertCircle className="w-3.5 h-3.5" /> Failed
+              <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] text-red-400">
+                <AlertCircle className="w-3.5 h-3.5" /> <span className="hidden xs:inline">Failed</span>
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400">
-                <Check className="w-3.5 h-3.5" /> Success
+              <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] text-emerald-400">
+                <Check className="w-3.5 h-3.5" /> <span className="hidden xs:inline">Success</span>
               </span>
             )
           ) : (
-            <span className="inline-flex items-center gap-1 text-[11px] text-zinc-400 animate-pulse">
+            <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] text-zinc-400 animate-pulse">
               <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" /> Running...
             </span>
           )}
@@ -103,7 +103,7 @@ export const ToolActivity: React.FC<ToolActivityProps> = ({ event, onViewScreens
 
       {/* Expanded body */}
       {expanded && (
-        <div className="p-3.5 space-y-3 border-t border-zinc-800/60 bg-zinc-950/60 font-mono text-xs">
+        <div className="p-3 sm:p-3.5 space-y-3 border-t border-zinc-800/60 bg-zinc-950/60 font-mono text-xs">
           {event.input && (
             <div className="space-y-1">
               <div className="flex items-center justify-between text-[10px] uppercase font-sans font-semibold text-zinc-500 tracking-wider">
@@ -115,13 +115,13 @@ export const ToolActivity: React.FC<ToolActivityProps> = ({ event, onViewScreens
                       e
                     )
                   }
-                  className="hover:text-zinc-300 flex items-center gap-1"
+                  className="hover:text-zinc-300 flex items-center gap-1 cursor-pointer"
                 >
                   {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
                   <span>{copied ? 'Copied' : 'Copy'}</span>
                 </button>
               </div>
-              <pre className="p-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 overflow-x-auto whitespace-pre-wrap word-break-all text-[11px] leading-relaxed">
+              <pre className="p-2 sm:p-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 overflow-x-auto whitespace-pre-wrap break-all text-[10px] sm:text-[11px] leading-relaxed">
                 {typeof event.input === 'string' ? event.input : JSON.stringify(event.input, null, 2)}
               </pre>
             </div>
@@ -133,7 +133,7 @@ export const ToolActivity: React.FC<ToolActivityProps> = ({ event, onViewScreens
                 <span>{event.error ? 'Error Output' : 'Execution Output'}</span>
                 <button
                   onClick={(e) => handleCopy(outputText, e)}
-                  className="hover:text-zinc-300 flex items-center gap-1"
+                  className="hover:text-zinc-300 flex items-center gap-1 cursor-pointer"
                 >
                   {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
                   <span>{copied ? 'Copied' : 'Copy'}</span>
@@ -141,7 +141,7 @@ export const ToolActivity: React.FC<ToolActivityProps> = ({ event, onViewScreens
               </div>
               <pre
                 className={cn(
-                  'p-2.5 rounded-lg border overflow-x-auto whitespace-pre font-mono max-h-96 text-[11px] leading-relaxed',
+                  'p-2 sm:p-2.5 rounded-lg border overflow-x-auto whitespace-pre font-mono max-h-72 sm:max-h-96 text-[10px] sm:text-[11px] leading-relaxed',
                   event.error
                     ? 'bg-red-950/20 text-red-300 border-red-900/40'
                     : 'bg-zinc-900 text-zinc-300 border-zinc-800'

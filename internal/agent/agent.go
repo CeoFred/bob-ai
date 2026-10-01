@@ -243,6 +243,14 @@ func (a *Agent) ApproveTool(taskID string, approved bool) error {
 		Result:         fmt.Sprintf("User %s tool execution", strings.ToLower(decisionStr)),
 	})
 
+	a.emitEvent(task, Event{
+		Type:      EventTaskStatusChanged,
+		TaskID:    task.ID,
+		SessionID: task.SessionID,
+		Status:    StatusRunning,
+		Message:   fmt.Sprintf("Tool execution %s by user", strings.ToLower(decisionStr)),
+	})
+
 	if respCh != nil {
 		respCh <- approved
 	}
@@ -516,6 +524,16 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 							Name:       toolName,
 							ToolCallID: tc.ID,
 							Content:    rejectMsg,
+						})
+						a.emitEvent(task, Event{
+							Type:       EventToolCompleted,
+							TaskID:     task.ID,
+							SessionID:  task.SessionID,
+							Tool:       toolName,
+							Input:      in.Command,
+							Output:     "Command execution rejected by user",
+							Error:      "User rejected command execution",
+							DurationMs: 0,
 						})
 						continue
 					}

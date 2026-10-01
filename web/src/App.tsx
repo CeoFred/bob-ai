@@ -29,7 +29,9 @@ export const App: React.FC = () => {
   const [projects, setProjects] = useState<ProjectWithSessions[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>('');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    return typeof window !== 'undefined' ? window.innerWidth >= 768 : true;
+  });
   const [currentTask, setCurrentTask] = useState<Task | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [screenshotModalUrl, setScreenshotModalUrl] = useState<string | null>(null);
@@ -71,10 +73,19 @@ export const App: React.FC = () => {
 
     window.addEventListener('popstate', handlePopState);
 
+    // Responsive listener for desktop vs mobile resize
+    const handleResize = () => {
+      if (window.innerWidth >= 1024) {
+        setSidebarOpen(true);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+
     return () => {
       unsubStatus();
       unsubEvent();
       window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('resize', handleResize);
       wsClient.disconnect();
     };
   }, []);
@@ -137,12 +148,30 @@ export const App: React.FC = () => {
 
           // Add all events emitted by this task
           if (t.events && t.events.length > 0) {
+            const taskEvents: AgentEvent[] = [];
             for (const ev of t.events) {
-              // Avoid duplicate user messages if already added
-              if (ev.type !== 'user.message' && ev.type !== 'task.status') {
-                reconstructedEvents.push(ev);
+              // Avoid duplicate user messages and task status if already represented
+              if (ev.type === 'user.message' || ev.type === 'task.status') {
+                continue;
+              }
+              if (ev.type === 'tool.completed') {
+                // If there is a matching tool.started before this, replace it in-place
+                let matched = false;
+                for (let i = taskEvents.length - 1; i >= 0; i--) {
+                  if (taskEvents[i].type === 'tool.started' && taskEvents[i].task_id === ev.task_id && taskEvents[i].tool === ev.tool) {
+                    taskEvents[i] = ev;
+                    matched = true;
+                    break;
+                  }
+                }
+                if (!matched) {
+                  taskEvents.push(ev);
+                }
+              } else {
+                taskEvents.push(ev);
               }
             }
+            reconstructedEvents.push(...taskEvents);
           } else if (t.result) {
             reconstructedEvents.push({
               type: 'agent.message',
@@ -194,14 +223,30 @@ export const App: React.FC = () => {
   const handleIncomingEvent = (ev: AgentEvent) => {
     const currentActive = activeSessionIdRef.current;
     if (!ev.session_id || ev.session_id === currentActive) {
-      setEvents((prev) => [...prev, ev]);
+      setEvents((prev) => {
+        if (ev.type === 'tool.completed') {
+          // Replace matching tool.started in-place to avoid duplicate tool boxes
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].type === 'tool.started' && prev[i].task_id === ev.task_id && prev[i].tool === ev.tool) {
+              const updated = [...prev];
+              updated[i] = ev;
+              return updated;
+            }
+          }
+        }
+        return [...prev, ev];
+      });
     }
 
     if (ev.type === 'task.status' || ev.type === 'task.completed') {
       setCurrentTask((prev) => {
         if (!prev || prev.id === ev.task_id) {
           const newStatus = ev.status || (ev.type === 'task.completed' ? 'completed' : 'running');
-          return prev ? { ...prev, status: newStatus } : null;
+          const updated = prev ? { ...prev, status: newStatus } : null;
+          if (updated && newStatus !== 'waiting_for_approval') {
+            updated.pending_approval = undefined;
+          }
+          return updated;
         }
         return prev;
       });
@@ -321,6 +366,15 @@ export const App: React.FC = () => {
 
   const handleApprove = async (taskId: string, approved: boolean) => {
     try {
+      setCurrentTask((prev) =>
+        prev && prev.id === taskId
+          ? {
+              ...prev,
+              status: 'running',
+              pending_approval: undefined,
+            }
+          : prev
+      );
       await approveTask(taskId, approved);
     } catch (e) {
       console.error('Failed to send approval:', e);
@@ -379,7 +433,7 @@ export const App: React.FC = () => {
     ) || null;
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#09090b] font-sans antialiased text-zinc-100">
+    <div className="flex flex-col h-screen h-[100dvh] w-screen overflow-hidden bg-[#09090b] font-sans antialiased text-zinc-100">
       <Header
         status={status}
         online={online}
@@ -390,7 +444,7 @@ export const App: React.FC = () => {
         onNewChat={handleNewConversation}
       />
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         <Sidebar
           projects={projects}
           sessions={sessions}
@@ -402,9 +456,10 @@ export const App: React.FC = () => {
           onDeleteSession={handleDeleteSession}
           onDeleteProject={handleDeleteProject}
           open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
         />
 
-        <main className="flex-1 flex flex-col overflow-hidden bg-[#09090b]">
+        <main className="flex-1 flex flex-col overflow-hidden bg-[#09090b] min-w-0">
           <ChatView
             currentTask={currentTask}
             events={events}
@@ -433,4 +488,3 @@ export const App: React.FC = () => {
     </div>
   );
 };
-
