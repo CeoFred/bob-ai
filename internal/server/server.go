@@ -168,7 +168,18 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	writeJSON(w, http.StatusOK, sess)
+
+	sessionTasks := make([]*agent.Task, 0, len(sess.TaskIDs))
+	for _, tid := range sess.TaskIDs {
+		if t, ok := s.agent.GetTask(tid); ok {
+			sessionTasks = append(sessionTasks, t)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session": sess,
+		"tasks":   sessionTasks,
+	})
 }
 
 type CreateTaskRequest struct {

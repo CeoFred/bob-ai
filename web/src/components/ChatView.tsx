@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Task, AgentEvent } from '../types';
 import { ToolActivity } from './ToolActivity';
 import { ApprovalBanner } from './ApprovalBanner';
-import { Send, Square, Bot, Sparkles, Terminal, Camera, FolderSearch } from 'lucide-react';
+import { Send, Square, Bot, User, Sparkles, Terminal, Camera, FolderSearch, Loader2 } from 'lucide-react';
 
 interface ChatViewProps {
   currentTask: Task | null;
@@ -24,7 +24,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const isRunning = currentTask?.status === 'running' || currentTask?.status === 'waiting_for_approval';
+  const isRunning =
+    currentTask !== null &&
+    (currentTask.status === 'running' ||
+      currentTask.status === 'waiting_for_approval' ||
+      currentTask.status === 'queued');
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -58,8 +62,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <div className="space-y-2">
               <h2 className="text-xl font-bold text-white">Hey, I'm Bob</h2>
               <p className="text-sm text-gray-400 leading-relaxed">
-                Your local AI computer agent. I run locally on this Apple Silicon Mac and can execute shell commands,
-                manipulate project files, capture screenshots, and report findings securely over Tailscale.
+                Your local AI personal computer agent running on this Mac. I reason about tasks and execute terminal commands,
+                filesystem operations, and screen captures securely with real-time audit logging.
               </p>
             </div>
 
@@ -69,7 +73,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 className="p-3 rounded-xl bg-[#161b22] hover:bg-[#21262d] border border-[#30363d] text-left transition-all group"
               >
                 <div className="flex items-center gap-2 text-xs font-semibold text-blue-400 group-hover:text-blue-300">
-                  <Sparkles className="w-3.5 h-3.5" /> Acceptance Test Prompt
+                  <Sparkles className="w-3.5 h-3.5" /> Acceptance Test
                 </div>
                 <div className="text-[11px] text-gray-400 mt-1 line-clamp-2">
                   "Tell me what directory Bob is running from, list files, and take screenshot."
@@ -84,7 +88,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   <Terminal className="w-3.5 h-3.5" /> Git Status
                 </div>
                 <div className="text-[11px] text-gray-400 mt-1">
-                  Check working tree and git branch status.
+                  Inspect working tree and active branches.
                 </div>
               </button>
 
@@ -96,19 +100,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   <Camera className="w-3.5 h-3.5" /> Screen Capture
                 </div>
                 <div className="text-[11px] text-gray-400 mt-1">
-                  Capture macOS desktop state and display image.
+                  Capture macOS desktop display.
                 </div>
               </button>
 
               <button
-                onClick={() => handleQuickPrompt('List all Go files in this project and check code structure')}
+                onClick={() => handleQuickPrompt('List all files in the current workspace directory')}
                 className="p-3 rounded-xl bg-[#161b22] hover:bg-[#21262d] border border-[#30363d] text-left transition-all group"
               >
                 <div className="flex items-center gap-2 text-xs font-semibold text-amber-400 group-hover:text-amber-300">
-                  <FolderSearch className="w-3.5 h-3.5" /> Inspect Project
+                  <FolderSearch className="w-3.5 h-3.5" /> List Workspace
                 </div>
                 <div className="text-[11px] text-gray-400 mt-1">
-                  Search codebase structure and files.
+                  Inspect project folders and structure.
                 </div>
               </button>
             </div>
@@ -116,30 +120,47 @@ export const ChatView: React.FC<ChatViewProps> = ({
         ) : (
           <div className="max-w-3xl mx-auto space-y-4">
             {events.map((ev, idx) => {
+              // 1. User Message -> Aligned to the RIGHT with User icon & Blue bubble
+              if (ev.sender === 'user' || ev.type === 'user.message') {
+                return (
+                  <div key={idx} className="flex items-start justify-end gap-3 pl-12 animate-fadeIn">
+                    <div className="p-3.5 rounded-2xl rounded-tr-sm bg-blue-600 text-white text-sm leading-relaxed max-w-[80%] shadow-md shadow-blue-600/10">
+                      <p className="whitespace-pre-wrap">{ev.message}</p>
+                    </div>
+                    <div className="p-2 rounded-xl bg-blue-500/20 text-blue-400 border border-blue-500/30 mt-0.5 flex-shrink-0" title="You">
+                      <User className="w-4 h-4" />
+                    </div>
+                  </div>
+                );
+              }
+
+              // 2. Bob Assistant Message -> Aligned to the LEFT with Bot icon & Slate bubble
               if (ev.type === 'agent.message') {
                 return (
-                  <div key={idx} className="flex items-start gap-3">
-                    <div className="p-2 rounded-xl bg-[#161b22] border border-[#30363d] text-blue-400 mt-0.5">
+                  <div key={idx} className="flex items-start justify-start gap-3 pr-12 animate-fadeIn">
+                    <div className="p-2 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white mt-0.5 flex-shrink-0 shadow-md shadow-blue-500/20" title="Bob">
                       <Bot className="w-4 h-4" />
                     </div>
-                    <div className="flex-1 p-3.5 rounded-2xl bg-[#161b22] border border-[#30363d] text-sm leading-relaxed text-gray-200">
+                    <div className="p-3.5 rounded-2xl rounded-tl-sm bg-[#161b22] border border-[#30363d] text-sm leading-relaxed text-gray-200 max-w-[85%] shadow-sm">
                       <p className="whitespace-pre-wrap">{ev.message}</p>
                     </div>
                   </div>
                 );
               }
 
+              // 3. Tool Activity (Started / Completed)
               if (ev.type === 'tool.started' || ev.type === 'tool.completed') {
                 return (
-                  <div key={idx} className="pl-10">
+                  <div key={idx} className="pl-11 pr-4">
                     <ToolActivity event={ev} onViewScreenshot={onViewScreenshot} />
                   </div>
                 );
               }
 
+              // 4. Approval Required
               if (ev.type === 'tool.approval_required') {
                 return (
-                  <div key={idx} className="pl-10">
+                  <div key={idx} className="pl-11 pr-4">
                     <ApprovalBanner
                       taskId={ev.task_id}
                       toolName={ev.tool || 'terminal'}
@@ -151,18 +172,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 );
               }
 
+              // 5. Agent Thinking Indicator
               if (ev.type === 'agent.thinking') {
                 return (
-                  <div key={idx} className="flex items-center gap-2 text-xs text-gray-500 pl-11 py-1">
-                    <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
-                    <span>{ev.message || 'Reasoning...'}</span>
+                  <div key={idx} className="flex items-center gap-2 text-xs text-gray-400 pl-11 py-1">
+                    <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />
+                    <span>{ev.message || 'Reasoning about next action...'}</span>
                   </div>
                 );
               }
 
+              // 6. Error
               if (ev.type === 'agent.error') {
                 return (
-                  <div key={idx} className="pl-10 p-3 rounded-xl bg-rose-950/20 border border-rose-500/30 text-rose-300 text-xs">
+                  <div key={idx} className="pl-11 pr-4 p-3 rounded-xl bg-rose-950/20 border border-rose-500/30 text-rose-300 text-xs">
                     ⚠️ {ev.error}
                   </div>
                 );
@@ -187,16 +210,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
             placeholder={
               isRunning
                 ? 'Bob is working on a task...'
-                : 'Ask Bob to do something on your Mac (e.g. "Run tests", "List files")...'
+                : 'Ask Bob to do something on your Mac (e.g. "Run tests", "List files", "Take screenshot")...'
             }
-            className="flex-1 bg-[#0d1117] text-white text-sm px-4 py-3 rounded-xl border border-[#30363d] focus:border-blue-500 focus:outline-none placeholder-gray-500 disabled:opacity-60"
+            className="flex-1 bg-[#0d1117] text-white text-sm px-4 py-3 rounded-xl border border-[#30363d] focus:border-blue-500 focus:outline-none placeholder-gray-500 disabled:opacity-60 transition-all"
           />
 
           {isRunning && currentTask ? (
             <button
               type="button"
               onClick={() => onCancel(currentTask.id)}
-              className="flex items-center gap-1.5 px-4 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-sm font-semibold transition-all shadow-md shadow-rose-600/20"
+              className="flex items-center gap-1.5 px-5 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-sm font-semibold transition-all shadow-md shadow-rose-600/20 active:scale-95 cursor-pointer"
             >
               <Square className="w-4 h-4 fill-current" />
               <span>Stop</span>
@@ -205,7 +228,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="submit"
               disabled={!input.trim()}
-              className="flex items-center gap-1.5 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-sm font-semibold transition-all shadow-md shadow-blue-600/20"
+              className="flex items-center gap-1.5 px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-sm font-semibold transition-all shadow-md shadow-blue-600/20 active:scale-95 cursor-pointer"
             >
               <Send className="w-4 h-4" />
               <span>Send</span>

@@ -14,6 +14,17 @@ export async function fetchSessions(): Promise<Session[]> {
   return res.json();
 }
 
+export async function fetchSession(id: string): Promise<{ session: Session; tasks: Task[] }> {
+  const res = await fetch(`${API_BASE}/api/sessions/${id}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  // Handle both {session, tasks} or direct Session object for backwards compatibility
+  if (data.session) {
+    return data;
+  }
+  return { session: data, tasks: [] };
+}
+
 export async function createSession(): Promise<Session> {
   const res = await fetch(`${API_BASE}/api/sessions`, {
     method: 'POST',

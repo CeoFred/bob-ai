@@ -10,6 +10,7 @@ export interface ToolResult {
 
 export interface AgentEvent {
   type: string;
+  sender?: 'user' | 'bob';
   task_id: string;
   session_id?: string;
   timestamp: string;
@@ -40,12 +41,23 @@ export interface Task {
   };
 }
 
+export interface SessionMessage {
+  role: string;
+  content: string;
+}
+
 export interface Session {
   id: string;
   title: string;
   created_at: string;
   last_activity: string;
+  messages?: SessionMessage[];
   task_ids: string[];
+}
+
+export interface SessionDetailResponse {
+  session: Session;
+  tasks: Task[];
 }
 
 export interface SystemInfo {
