@@ -217,6 +217,7 @@ export const App: React.FC = () => {
       fetchSessions().then(setSessions).catch(() => {});
     } catch (e) {
       console.error('Failed to send task:', e);
+      setCurrentTask(null);
       setEvents((prev) => [
         ...prev,
         {

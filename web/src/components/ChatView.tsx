@@ -172,17 +172,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 );
               }
 
-              // 5. Agent Thinking Indicator
-              if (ev.type === 'agent.thinking') {
-                return (
-                  <div key={idx} className="flex items-center gap-2 text-xs text-gray-400 pl-11 py-1">
-                    <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />
-                    <span>{ev.message || 'Reasoning about next action...'}</span>
-                  </div>
-                );
-              }
-
-              // 6. Error
+              // 5. Error
               if (ev.type === 'agent.error') {
                 return (
                   <div key={idx} className="pl-11 pr-4 p-3 rounded-xl bg-rose-950/20 border border-rose-500/30 text-rose-300 text-xs">
@@ -193,6 +183,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               return null;
             })}
+
+            {/* Active Reasoning/Thinking Indicator (only shown while Bob is actively executing) */}
+            {isRunning && currentTask?.status === 'running' && (
+              <div className="flex items-center gap-2 text-xs text-blue-400 pl-11 py-1.5 animate-pulse">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                <span className="font-medium text-gray-300">
+                  {([...events].reverse().find((e) => e.type === 'agent.thinking' && (!currentTask || e.task_id === currentTask.id))?.message) || 'Bob is reasoning about next action...'}
+                </span>
+              </div>
+            )}
 
             <div ref={messagesEndRef} />
           </div>
