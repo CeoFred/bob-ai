@@ -45,11 +45,12 @@ func (o *OllamaLLM) Name() string {
 
 // OllamaChatPayload represents the JSON payload expected by Ollama /api/chat.
 type ollamaChatPayload struct {
-	Model    string           `json:"model"`
-	Messages []ollamaMessage  `json:"messages"`
-	Tools    []ToolDefinition `json:"tools,omitempty"`
-	Stream   bool             `json:"stream"`
-	Options  map[string]any   `json:"options,omitempty"`
+	Model     string           `json:"model"`
+	Messages  []ollamaMessage  `json:"messages"`
+	Tools     []ToolDefinition `json:"tools,omitempty"`
+	Stream    bool             `json:"stream"`
+	KeepAlive string           `json:"keep_alive,omitempty"`
+	Options   map[string]any   `json:"options,omitempty"`
 }
 
 type ollamaMessage struct {
@@ -87,10 +88,11 @@ func (o *OllamaLLM) Chat(ctx context.Context, request ChatRequest) (ChatResponse
 	}
 
 	payload := ollamaChatPayload{
-		Model:    model,
-		Messages: toOllamaMessages(request.Messages),
-		Tools:    request.Tools,
-		Stream:   false,
+		Model:     model,
+		Messages:  toOllamaMessages(request.Messages),
+		Tools:     request.Tools,
+		Stream:    false,
+		KeepAlive: "24h",
 		Options: map[string]any{
 			"temperature": request.Temperature,
 		},
@@ -167,10 +169,11 @@ func (o *OllamaLLM) Stream(ctx context.Context, request ChatRequest) (<-chan Str
 	}
 
 	payload := ollamaChatPayload{
-		Model:    model,
-		Messages: toOllamaMessages(request.Messages),
-		Tools:    request.Tools,
-		Stream:   true,
+		Model:     model,
+		Messages:  toOllamaMessages(request.Messages),
+		Tools:     request.Tools,
+		Stream:    true,
+		KeepAlive: "24h",
 		Options: map[string]any{
 			"temperature": request.Temperature,
 		},

@@ -27,6 +27,7 @@ const (
 	EventToolStarted           EventType = "tool.started"
 	EventToolApprovalRequired  EventType = "tool.approval_required"
 	EventToolCompleted         EventType = "tool.completed"
+	EventAgentMessageDelta     EventType = "agent.message.delta"
 	EventAgentMessage          EventType = "agent.message"
 	EventAgentError            EventType = "agent.error"
 	EventTaskStatusChanged     EventType = "task.status"
@@ -35,18 +36,19 @@ const (
 
 // Event is emitted in real time to WebSocket/SSE clients.
 type Event struct {
-	Type       EventType           `json:"type"`
-	TaskID     string              `json:"task_id"`
-	SessionID  string              `json:"session_id,omitempty"`
-	Timestamp  string              `json:"timestamp"`
-	Message    string              `json:"message,omitempty"`
-	Tool       string              `json:"tool,omitempty"`
-	Input      any                 `json:"input,omitempty"`
-	Output     string              `json:"output,omitempty"`
+	Type       EventType            `json:"type"`
+	TaskID     string               `json:"task_id"`
+	SessionID  string               `json:"session_id,omitempty"`
+	Timestamp  string               `json:"timestamp"`
+	Message    string               `json:"message,omitempty"`
+	Delta      string               `json:"delta,omitempty"`
+	Tool       string               `json:"tool,omitempty"`
+	Input      any                  `json:"input,omitempty"`
+	Output     string               `json:"output,omitempty"`
 	ToolResult *registry.ToolResult `json:"tool_result,omitempty"`
-	DurationMs int64               `json:"duration_ms,omitempty"`
-	Status     TaskStatus          `json:"status,omitempty"`
-	Error      string              `json:"error,omitempty"`
+	DurationMs int64                `json:"duration_ms,omitempty"`
+	Status     TaskStatus           `json:"status,omitempty"`
+	Error      string               `json:"error,omitempty"`
 }
 
 // PendingApproval holds state for a tool execution awaiting human confirmation.
@@ -79,4 +81,7 @@ type AgentConfig struct {
 	UserName       string
 	UserAlias      string
 	UserTitle      string
+	DefaultModel   string
+	CodingModel    string
+	GeneralModel   string
 }

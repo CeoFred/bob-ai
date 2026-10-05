@@ -381,6 +381,19 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 	}
 	systemPrompt += fmt.Sprintf("\n\nUSER IDENTITY:\n- Name: %s\n- Alias: %s\n- Title: %s\n- Note: The user you are currently conversing with and assisting is %s (%s). Address them respectfully and acknowledge them as your creator when asked.", userName, userAlias, userTitle, userName, userAlias)
 
+	// Context awareness: Resolve recently referenced applications and files
+	lastApp := a.resolveLastActiveApp(session.Messages)
+	lastFile := a.resolveLastActiveFile(session.Messages)
+	if lastApp != "" || lastFile != "" {
+		systemPrompt += "\n\nACTIVE CONVERSATION CONTEXT & PRONOUN RESOLUTION:"
+		if lastApp != "" {
+			systemPrompt += fmt.Sprintf("\n- Last Active/Referenced Application: %s\n  (When the user says 'it', 'that', 'the app', 'close it', 'quit it', or 'open it', they are referring to %s)", lastApp, lastApp)
+		}
+		if lastFile != "" {
+			systemPrompt += fmt.Sprintf("\n- Last Active/Referenced File: %s\n  (When the user says 'it', 'that file', or 'the code', they are referring to %s)", lastFile, lastFile)
+		}
+	}
+
 	// Build working message history with sliding window to prevent token overflow
 	const maxContextMessages = 40
 	sessionMsgs := session.Messages
@@ -419,34 +432,76 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 		default:
 		}
 
+		activeModel, routeReason := a.SelectModelForTask(session, task.Prompt)
+
 		a.emitEvent(task, Event{
 			Type:      EventAgentThinking,
 			TaskID:    task.ID,
 			SessionID: task.SessionID,
-			Message:   fmt.Sprintf("Step %d: Reasoning about next action...", stepCount),
+			Message:   fmt.Sprintf("Step %d [%s - %s]: Reasoning about next action...", stepCount, activeModel, routeReason),
 		})
 
 		a.recordAudit(audit.Entry{
 			TaskID:    task.ID,
 			SessionID: task.SessionID,
 			Action:    audit.ActionStepReasoning,
-			Input:     fmt.Sprintf("Step %d", stepCount),
-			Result:    "Prompting LLM with conversation history and tools",
+			Input:     fmt.Sprintf("Step %d [%s]", stepCount, activeModel),
+			Result:    fmt.Sprintf("Prompting %s (%s) with conversation history and tools", activeModel, routeReason),
 		})
 
+		stepTools := toolDefs
+		if stepCount == 1 && isPureConversationalGreeting(task.Prompt) {
+			stepTools = nil // Fast-path for simple greetings to eliminate function schema parsing latency
+		}
+
 		chatReq := llm.ChatRequest{
+			Model:       activeModel,
 			Messages:    messages,
-			Tools:       toolDefs,
+			Tools:       stepTools,
 			Temperature: 0.2,
 		}
 
-		resp, err := a.llmClient.Chat(ctx, chatReq)
-		if err != nil {
-			a.finishTask(task, StatusFailed, "", fmt.Sprintf("LLM inference failed: %v", err))
-			return
-		}
+		var assistantMsg llm.Message
+		streamChan, streamErr := a.llmClient.Stream(ctx, chatReq)
+		if streamErr == nil && streamChan != nil {
+			var accContent strings.Builder
+			var accToolCalls []llm.ToolCall
 
-		assistantMsg := resp.Message
+			for streamEv := range streamChan {
+				if streamEv.Error != nil {
+					a.finishTask(task, StatusFailed, "", fmt.Sprintf("LLM streaming failed: %v", streamEv.Error))
+					return
+				}
+
+				if streamEv.Delta != "" {
+					accContent.WriteString(streamEv.Delta)
+					a.emitEvent(task, Event{
+						Type:      EventAgentMessageDelta,
+						TaskID:    task.ID,
+						SessionID: task.SessionID,
+						Delta:     streamEv.Delta,
+						Message:   accContent.String(),
+					})
+				}
+
+				if streamEv.ToolCall != nil {
+					accToolCalls = append(accToolCalls, *streamEv.ToolCall)
+				}
+			}
+
+			assistantMsg = llm.Message{
+				Role:      llm.RoleAssistant,
+				Content:   accContent.String(),
+				ToolCalls: accToolCalls,
+			}
+		} else {
+			resp, err := a.llmClient.Chat(ctx, chatReq)
+			if err != nil {
+				a.finishTask(task, StatusFailed, "", fmt.Sprintf("LLM inference failed: %v", err))
+				return
+			}
+			assistantMsg = resp.Message
+		}
 
 		// If no native tool calls returned, attempt fallback parsing from text content
 		if len(assistantMsg.ToolCalls) == 0 {
@@ -461,7 +516,7 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 
 		// Fallback intent enforcement on Step 1 if the LLM attempted to reply with text instead of executing requested action
 		if stepCount == 1 && len(assistantMsg.ToolCalls) == 0 {
-			if intentCall := a.detectActionIntent(task.Prompt, assistantMsg.Content); intentCall != nil {
+			if intentCall := a.detectActionIntent(task.Prompt, assistantMsg.Content, sessionMsgs); intentCall != nil {
 				assistantMsg.ToolCalls = []llm.ToolCall{*intentCall}
 			}
 		}
@@ -498,6 +553,40 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 
 			toolName := tc.Function.Name
 			var rawArgs json.RawMessage = tc.Function.Arguments
+
+			// Pronoun & Anaphora resolution on tool arguments (e.g. "close it" -> close_app(app_name="WhatsApp"))
+			if toolName == "close_app" || toolName == "open_app" {
+				var in struct {
+					AppName  string `json:"app_name"`
+					Force    bool   `json:"force,omitempty"`
+					PID      int    `json:"pid,omitempty"`
+					BundleID string `json:"bundle_id,omitempty"`
+				}
+				if err := json.Unmarshal(rawArgs, &in); err == nil {
+					if isPronounOrGeneric(in.AppName) {
+						if resolvedApp := a.resolveLastActiveApp(sessionMsgs); resolvedApp != "" {
+							in.AppName = resolvedApp
+							rawArgs, _ = json.Marshal(in)
+							tc.Function.Arguments = rawArgs
+						}
+					}
+				}
+			} else if toolName == "read_file" || toolName == "replace_file_content" || toolName == "write_file" {
+				var in struct {
+					Path string `json:"path"`
+				}
+				if err := json.Unmarshal(rawArgs, &in); err == nil {
+					if isPronounOrGeneric(in.Path) {
+						if resolvedFile := a.resolveLastActiveFile(sessionMsgs); resolvedFile != "" {
+							var fullMap map[string]any
+							_ = json.Unmarshal(rawArgs, &fullMap)
+							fullMap["path"] = resolvedFile
+							rawArgs, _ = json.Marshal(fullMap)
+							tc.Function.Arguments = rawArgs
+						}
+					}
+				}
+			}
 
 			a.emitEvent(task, Event{
 				Type:      EventToolStarted,
@@ -793,7 +882,7 @@ func (a *Agent) extractToolCallsFromContent(content string) ([]llm.ToolCall, str
 }
 
 // detectActionIntent identifies explicit user intent for direct tool execution if the model returned plain text.
-func (a *Agent) detectActionIntent(prompt, content string) *llm.ToolCall {
+func (a *Agent) detectActionIntent(prompt, content string, messages []llm.Message) *llm.ToolCall {
 	promptTrimmed := strings.TrimSpace(prompt)
 	if promptTrimmed == "" {
 		return nil
@@ -815,7 +904,7 @@ func (a *Agent) detectActionIntent(prompt, content string) *llm.ToolCall {
 		}
 	}
 
-	// 1. Close application intent: "close whatsapp", "exit whatsapp", "quit whatsapp", "kill whatsapp"
+	// 1. Close application intent: "close whatsapp", "close it", "exit that", "quit whatsapp", "kill it"
 	closeRegex := regexp.MustCompile(`^(?:close|exit|quit|terminate|kill|shut\s+down)\s+(?:the\s+app(?:lication)?\s+|the\s+)?([a-zA-Z0-9_\-\.\s]+)$`)
 	if match := closeRegex.FindStringSubmatch(cleanPrompt); len(match) > 1 {
 		rawAppName := strings.TrimSpace(match[1])
@@ -826,7 +915,13 @@ func (a *Agent) detectActionIntent(prompt, content string) *llm.ToolCall {
 		rawAppName = strings.Trim(rawAppName, ".!?;:'\"")
 		rawAppName = strings.TrimSpace(rawAppName)
 
-		if rawAppName != "" {
+		if isPronounOrGeneric(rawAppName) {
+			if resolved := a.resolveLastActiveApp(messages); resolved != "" {
+				rawAppName = resolved
+			}
+		}
+
+		if rawAppName != "" && !isPronounOrGeneric(rawAppName) {
 			args, _ := json.Marshal(map[string]any{"app_name": rawAppName})
 			return &llm.ToolCall{
 				ID:   "call_intent_close_app",
@@ -839,7 +934,7 @@ func (a *Agent) detectActionIntent(prompt, content string) *llm.ToolCall {
 		}
 	}
 
-	// 2. Open application intent: "open whatsapp", "launch whatsapp", "start whatsapp", "run whatsapp"
+	// 2. Open application intent: "open whatsapp", "open it", "launch that", "start it", "run whatsapp"
 	openRegex := regexp.MustCompile(`^(?:open|launch|start|run)\s+(?:the\s+app(?:lication)?\s+|the\s+)?([a-zA-Z0-9_\-\.\s]+)$`)
 	if match := openRegex.FindStringSubmatch(cleanPrompt); len(match) > 1 {
 		rawAppName := strings.TrimSpace(match[1])
@@ -850,7 +945,13 @@ func (a *Agent) detectActionIntent(prompt, content string) *llm.ToolCall {
 		rawAppName = strings.Trim(rawAppName, ".!?;:'\"")
 		rawAppName = strings.TrimSpace(rawAppName)
 
-		if rawAppName != "" {
+		if isPronounOrGeneric(rawAppName) {
+			if resolved := a.resolveLastActiveApp(messages); resolved != "" {
+				rawAppName = resolved
+			}
+		}
+
+		if rawAppName != "" && !isPronounOrGeneric(rawAppName) {
 			args, _ := json.Marshal(map[string]any{"app_name": rawAppName})
 			return &llm.ToolCall{
 				ID:   "call_intent_open_app",
@@ -892,6 +993,97 @@ func (a *Agent) detectActionIntent(prompt, content string) *llm.ToolCall {
 	}
 
 	return nil
+}
+
+func isPronounOrGeneric(s string) bool {
+	clean := strings.ToLower(strings.TrimSpace(strings.Trim(s, ".!?;:'\"")))
+	generic := map[string]bool{
+		"it":              true,
+		"that":            true,
+		"this":            true,
+		"them":            true,
+		"the app":         true,
+		"the application": true,
+		"the program":     true,
+		"the process":     true,
+		"the window":      true,
+		"the file":        true,
+		"that file":       true,
+		"this file":       true,
+		"app":             true,
+		"application":     true,
+		"program":         true,
+		"process":         true,
+		"file":            true,
+		"it again":        true,
+		"that again":      true,
+		"it please":       true,
+		"that please":     true,
+	}
+	return generic[clean]
+}
+
+func (a *Agent) resolveLastActiveApp(messages []llm.Message) string {
+	var appCandidateRegex = regexp.MustCompile(`(?i)\b(?:open|opened|launch|launched|close|closed|exit|quit|running)\s+(?:the\s+)?([A-Z][a-zA-Z0-9_\-]+(?:\s+[A-Z][a-zA-Z0-9_\-]+)?)`)
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+
+		// 1. Inspect tool calls
+		for _, tc := range msg.ToolCalls {
+			if tc.Function.Name == "open_app" || tc.Function.Name == "close_app" {
+				var in struct {
+					AppName string `json:"app_name"`
+				}
+				if err := json.Unmarshal(tc.Function.Arguments, &in); err == nil {
+					clean := strings.TrimSpace(in.AppName)
+					if clean != "" && !isPronounOrGeneric(clean) {
+						return clean
+					}
+				}
+			}
+		}
+
+		// 2. Inspect tool outputs
+		if msg.Role == llm.RoleTool && (msg.Name == "open_app" || msg.Name == "close_app") {
+			quotedRegex := regexp.MustCompile(`(?i)(?:application|opened|closed|launch)\s+["']([^"']+)["']`)
+			if m := quotedRegex.FindStringSubmatch(msg.Content); len(m) > 1 {
+				clean := strings.TrimSpace(m[1])
+				if clean != "" && !isPronounOrGeneric(clean) {
+					return clean
+				}
+			}
+		}
+
+		// 3. Inspect user and assistant message contents
+		if match := appCandidateRegex.FindStringSubmatch(msg.Content); len(match) > 1 {
+			cand := strings.TrimSpace(match[1])
+			if cand != "" && !isPronounOrGeneric(cand) && len(cand) > 1 {
+				return cand
+			}
+		}
+	}
+	return ""
+}
+
+func (a *Agent) resolveLastActiveFile(messages []llm.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		for _, tc := range msg.ToolCalls {
+			if tc.Function.Name == "read_file" || tc.Function.Name == "replace_file_content" || tc.Function.Name == "write_file" {
+				var in struct {
+					Path string `json:"path"`
+				}
+				if err := json.Unmarshal(tc.Function.Arguments, &in); err == nil {
+					clean := strings.TrimSpace(in.Path)
+					if clean != "" && !isPronounOrGeneric(clean) {
+						return clean
+					}
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func (a *Agent) parseSingleToolCall(jsonStr string, id string) (llm.ToolCall, bool) {
@@ -987,3 +1179,56 @@ func (a *Agent) recordAudit(entry audit.Entry) {
 		_ = a.auditLogger.Log(entry)
 	}
 }
+
+var codingKeywordsRegex = regexp.MustCompile(`(?i)\b(?:code|coding|function|refactor|compile|build|debug|syntax|ast|algorithm|typescript|golang|python|javascript|react|rust|css|html|api|endpoint|unit\s+test|test\s+suite|git\s+diff|git\s+commit|git\s+branch|repository|repo|replace_file_content|write_file|read_file|\.(?:go|ts|tsx|js|jsx|py|rs|c|cpp|h|java|rb|php|json|yaml|yml|md|sql|sh))\b`)
+
+func isCodingPrompt(prompt string) bool {
+	return codingKeywordsRegex.MatchString(prompt)
+}
+
+// SelectModelForTask dynamically routes to Qwen 2.5 for coding and Hermes 3 for general OS pairing & reasoning.
+func (a *Agent) SelectModelForTask(session *sessions.Session, prompt string) (string, string) {
+	codingModel := a.config.CodingModel
+	if codingModel == "" {
+		codingModel = a.config.DefaultModel
+	}
+	if codingModel == "" {
+		codingModel = "qwen2.5-coder:7b"
+	}
+
+	generalModel := a.config.GeneralModel
+	if generalModel == "" {
+		generalModel = a.config.DefaultModel
+	}
+	if generalModel == "" {
+		generalModel = "hermes3:8b"
+	}
+
+	// 1. Explicit Project Mode session -> Coding Model (e.g. Qwen 2.5 Coder)
+	if session != nil && session.Type == sessions.SessionTypeProject {
+		return codingModel, "Project Mode"
+	}
+
+	// 2. Coding intent in prompt -> Coding Model
+	if isCodingPrompt(prompt) {
+		return codingModel, "Coding Task"
+	}
+
+	// 3. General Assistant / OS Pairing -> General Model (e.g. Hermes 3)
+	return generalModel, "General Assistant"
+}
+
+func isPureConversationalGreeting(prompt string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(prompt))
+	trimmed = strings.TrimRight(trimmed, "!?.")
+	greetings := map[string]bool{
+		"hello": true, "hi": true, "hey": true, "hello bob": true, "hi bob": true, "hey bob": true,
+		"good morning": true, "good afternoon": true, "good evening": true,
+		"how are you": true, "how are you doing": true, "what's up": true, "whats up": true,
+		"who are you": true, "what is your name": true, "what can you do": true,
+		"thanks": true, "thank you": true, "yo": true, "sup": true,
+		"who made you": true, "who created you": true,
+	}
+	return greetings[trimmed]
+}
+

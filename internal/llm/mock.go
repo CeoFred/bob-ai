@@ -60,12 +60,21 @@ func (m *MockLLM) Stream(ctx context.Context, request ChatRequest) (<-chan Strea
 		return nil, err
 	}
 
-	ch := make(chan StreamEvent, 2)
+	ch := make(chan StreamEvent, len(resp.Message.ToolCalls)+2)
 	go func() {
 		defer close(ch)
-		ch <- StreamEvent{
-			Delta: resp.Message.Content,
-			Done:  false,
+		if resp.Message.Content != "" {
+			ch <- StreamEvent{
+				Delta: resp.Message.Content,
+				Done:  false,
+			}
+		}
+		for _, tc := range resp.Message.ToolCalls {
+			tcCopy := tc
+			ch <- StreamEvent{
+				ToolCall: &tcCopy,
+				Done:     false,
+			}
 		}
 		ch <- StreamEvent{
 			FinishReason: resp.FinishReason,

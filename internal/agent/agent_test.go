@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -656,6 +657,131 @@ func TestAgent_EnforceActionIntent_CloseApp(t *testing.T) {
 		t.Errorf("expected close_app tool execution event to be generated via action intent enforcement")
 	}
 }
+
+func TestAgent_PronounResolution_CloseIt(t *testing.T) {
+	// Turn 1: User asks to open WhatsApp -> agent opens WhatsApp
+	openArgs, _ := json.Marshal(map[string]any{"app_name": "WhatsApp"})
+	t1Step1 := llm.ChatResponse{
+		Message: llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "call_open_1",
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      "open_app",
+						Arguments: openArgs,
+					},
+				},
+			},
+		},
+	}
+	t1Step2 := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "WhatsApp has been successfully opened.",
+		},
+		FinishReason: "stop",
+	}
+
+	// Turn 2: User says "Close it" -> agent executes close_app(app_name="WhatsApp")
+	t2Step1 := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "WhatsApp has been successfully closed.",
+		},
+		FinishReason: "stop",
+	}
+	t2Step2 := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "WhatsApp is closed now, codemon.",
+		},
+		FinishReason: "stop",
+	}
+
+	ag, _, _, _ := setupTestAgent(t, t1Step1, t1Step2, t2Step1, t2Step2)
+	sess := ag.SessionManager().Create(sessions.SessionTypeConversation, "", "App Control Thread")
+
+	// Turn 1 Execution
+	task1 := ag.CreateTask(sess.ID, "Open WhatsApp")
+	ag.Run(context.Background(), task1)
+	time.Sleep(150 * time.Millisecond)
+
+	// Turn 2 Execution with pronoun "Close it"
+	task2 := ag.CreateTask(sess.ID, "Close it")
+	ag.Run(context.Background(), task2)
+
+	time.Sleep(100 * time.Millisecond)
+	tObj2, _ := ag.GetTask(task2.ID)
+	if tObj2.Status == agent.StatusWaitingForApproval {
+		_ = ag.ApproveTool(task2.ID, true)
+	}
+
+	for i := 0; i < 20; i++ {
+		time.Sleep(50 * time.Millisecond)
+		tObj2, _ = ag.GetTask(task2.ID)
+		if tObj2.Status == agent.StatusCompleted {
+			break
+		}
+	}
+
+	if tObj2.Status != agent.StatusCompleted {
+		t.Fatalf("turn 2 task not completed: %v (err: %s)", tObj2.Status, tObj2.Error)
+	}
+
+	// Verify that close_app was invoked with "WhatsApp", NOT "it"
+	var closedAppParam string
+	for _, ev := range tObj2.Events {
+		if ev.Type == agent.EventToolStarted && ev.Tool == "close_app" {
+			var in struct {
+				AppName string `json:"app_name"`
+			}
+			inputStr := fmt.Sprint(ev.Input)
+			_ = json.Unmarshal([]byte(inputStr), &in)
+			closedAppParam = in.AppName
+		}
+	}
+
+	if closedAppParam != "WhatsApp" {
+		t.Errorf("expected close_app parameter to be resolved to 'WhatsApp', got %q", closedAppParam)
+	}
+}
+
+func TestAgent_DynamicModelRouting(t *testing.T) {
+	ag, _, _, _ := setupTestAgent(t)
+
+	// 1. General conversation session -> Hermes 3
+	convSess := ag.SessionManager().Create(sessions.SessionTypeConversation, "", "General Chat")
+	model1, reason1 := ag.SelectModelForTask(convSess, "What is the weather today?")
+	if model1 != "hermes3:8b" {
+		t.Errorf("expected hermes3:8b for general conversation, got %q", model1)
+	}
+	if reason1 != "General Assistant" {
+		t.Errorf("expected 'General Assistant' reason, got %q", reason1)
+	}
+
+	// 2. Project session -> Qwen 2.5 Coder
+	projSess := ag.SessionManager().Create(sessions.SessionTypeProject, "/Users/codemon_/Documents/Bob-AI", "Project Mode")
+	model2, reason2 := ag.SelectModelForTask(projSess, "How does the agent loop work?")
+	if model2 != "qwen2.5-coder:7b" {
+		t.Errorf("expected qwen2.5-coder:7b for project mode, got %q", model2)
+	}
+	if reason2 != "Project Mode" {
+		t.Errorf("expected 'Project Mode' reason, got %q", reason2)
+	}
+
+	// 3. Coding keyword in conversation session -> Qwen 2.5 Coder
+	model3, reason3 := ag.SelectModelForTask(convSess, "Can you write a golang function to calculate fibonacci?")
+	if model3 != "qwen2.5-coder:7b" {
+		t.Errorf("expected qwen2.5-coder:7b for coding prompt, got %q", model3)
+	}
+	if reason3 != "Coding Task" {
+		t.Errorf("expected 'Coding Task' reason, got %q", reason3)
+	}
+}
+
+
 
 
 

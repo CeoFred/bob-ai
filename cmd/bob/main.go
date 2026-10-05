@@ -115,7 +115,7 @@ func main() {
 		)
 	}
 
-	// 9. Initialize Agent
+	// 9. Initialize Agent with Dynamic Dual-Model Routing
 	agentCore := agent.NewAgent(
 		llmClient,
 		toolReg,
@@ -129,6 +129,9 @@ func main() {
 			UserName:       cfg.User.Name,
 			UserAlias:      cfg.User.Alias,
 			UserTitle:      cfg.User.Title,
+			DefaultModel:   cfg.LLM.Model,
+			CodingModel:    cfg.LLM.CodingModel,
+			GeneralModel:   cfg.LLM.GeneralModel,
 		},
 	)
 
@@ -150,7 +153,9 @@ func main() {
 	fmt.Println("=====================================================")
 	fmt.Printf("• Apple Silicon: %s\n", sysInfo.CPUModel)
 	fmt.Printf("• System RAM:    %s\n", sysInfo.RAMFormatted)
-	fmt.Printf("• LLM Provider:  %s (%s)\n", cfg.LLM.Provider, cfg.LLM.Model)
+	fmt.Printf("• LLM Provider:  %s\n", cfg.LLM.Provider)
+	fmt.Printf("• General Model: %s (OS Pairing & Assistant Tasks)\n", cfg.LLM.GeneralModel)
+	fmt.Printf("• Coding Model:  %s (Project Mode & Code Editing)\n", cfg.LLM.CodingModel)
 	fmt.Printf("• Local URL:     http://localhost:%d\n", cfg.Server.Port)
 	if sysInfo.TailscaleIP != "" {
 		fmt.Printf("• Tailscale URL: http://%s:%d\n", sysInfo.TailscaleIP, cfg.Server.Port)

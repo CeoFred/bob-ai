@@ -38,11 +38,13 @@ type ServerConfig struct {
 }
 
 type LLMConfig struct {
-	Provider    string  `yaml:"provider" json:"provider"` // "ollama", "mock", etc.
-	BaseURL     string  `yaml:"base_url" json:"base_url"`
-	Model       string  `yaml:"model" json:"model"`
-	Temperature float64 `yaml:"temperature" json:"temperature"`
-	TimeoutSec  int     `yaml:"timeout_seconds" json:"timeout_seconds"`
+	Provider     string  `yaml:"provider" json:"provider"` // "ollama", "mock", etc.
+	BaseURL      string  `yaml:"base_url" json:"base_url"`
+	Model        string  `yaml:"model" json:"model"`               // Default / Fallback model
+	CodingModel  string  `yaml:"coding_model" json:"coding_model"`   // e.g. "qwen2.5-coder:7b"
+	GeneralModel string  `yaml:"general_model" json:"general_model"` // e.g. "hermes3:8b"
+	Temperature  float64 `yaml:"temperature" json:"temperature"`
+	TimeoutSec   int     `yaml:"timeout_seconds" json:"timeout_seconds"`
 }
 
 type AgentConfig struct {
@@ -102,11 +104,13 @@ func DefaultConfig() *Config {
 			APIToken: "", // If empty, can be set via BOB_API_TOKEN
 		},
 		LLM: LLMConfig{
-			Provider:    "ollama",
-			BaseURL:     "http://127.0.0.1:11434",
-			Model:       "qwen2.5-coder:7b",
-			Temperature: 0.2,
-			TimeoutSec:  120,
+			Provider:     "ollama",
+			BaseURL:      "http://127.0.0.1:11434",
+			Model:        "hermes3:8b",
+			CodingModel:  "qwen2.5-coder:7b",
+			GeneralModel: "hermes3:8b",
+			Temperature:  0.2,
+			TimeoutSec:   120,
 		},
 		Agent: AgentConfig{
 			MaxSteps:       20,

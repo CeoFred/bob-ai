@@ -15,6 +15,7 @@ export interface AgentEvent {
   session_id?: string;
   timestamp: string;
   message?: string;
+  delta?: string;
   tool?: string;
   input?: any;
   output?: string;

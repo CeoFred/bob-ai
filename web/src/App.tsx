@@ -284,6 +284,47 @@ export const App: React.FC = () => {
     const currentActive = activeSessionIdRef.current;
     if (!ev.session_id || ev.session_id === currentActive) {
       setEvents((prev) => {
+        if (ev.type === 'agent.message.delta') {
+          // Check if there is an in-flight agent message for this task
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].task_id === ev.task_id && prev[i].type === 'agent.message') {
+              const updated = [...prev];
+              updated[i] = {
+                ...updated[i],
+                message: ev.message || (updated[i].message || '') + (ev.delta || ''),
+              };
+              return updated;
+            }
+          }
+          // Initial token delta event
+          return [
+            ...prev,
+            {
+              type: 'agent.message',
+              sender: 'bob',
+              task_id: ev.task_id,
+              session_id: ev.session_id,
+              timestamp: ev.timestamp || new Date().toISOString(),
+              message: ev.message || ev.delta || '',
+            },
+          ];
+        }
+
+        if (ev.type === 'agent.message') {
+          // Update the in-flight streamed message with the finalized content
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].task_id === ev.task_id && prev[i].type === 'agent.message') {
+              const updated = [...prev];
+              updated[i] = {
+                ...updated[i],
+                message: ev.message || updated[i].message,
+              };
+              return updated;
+            }
+          }
+          return [...prev, ev];
+        }
+
         if (ev.type === 'tool.completed') {
           // Replace matching tool.started in-place to avoid duplicate tool boxes
           for (let i = prev.length - 1; i >= 0; i--) {
