@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -71,7 +72,14 @@ CRITICAL RULES:
    - After opening an application: check open_app's verification output or invoke list_running_apps to confirm the app is actively running.
    - After closing an application: check close_app's verification output or invoke list_running_apps to confirm the app has stopped.
    - Always explicitly report the confirmed, verified outcome to codemon / Alfred.
-7. Address codemon / Alfred with proper respect as your creator, and be concise and action-oriented.`
+7. Address codemon / Alfred with proper respect as your creator, and be concise and action-oriented.
+8. MANDATORY COMPREHENSIVE TEXT RESPONSES (NEVER OMIT DATA OR DEFER TO TOOL OUTPUT):
+   - The user cannot and must not rely on tool activity boxes or command logs to read results. You MUST ALWAYS synthesize and present all requested information directly, clearly, and completely in your final text response.
+   - NEVER say "I have provided you with a list of...", "See above", "The output is displayed above", or "I found X items" without providing the actual full list or content.
+   - When asked what applications are running: You MUST list all the running applications directly in your response message using a neat, structured markdown list (highlighting the active/frontmost application).
+   - When asked what applications are installed: You MUST list the relevant applications directly in your response message.
+   - When asked to run terminal commands, find files, or list directories: Always include and explain the actual findings and output directly in your response text.
+   - Your response must be completely self-contained so that when reading or reopening the chat, all the requested information is clearly visible right inside the response message.`
 
 type EventListener func(event Event)
 
@@ -106,7 +114,7 @@ func NewAgent(
 		cfg.TimeoutSeconds = 300
 	}
 
-	return &Agent{
+	ag := &Agent{
 		llmClient:      llmClient,
 		registry:       reg,
 		policy:         pol,
@@ -115,6 +123,43 @@ func NewAgent(
 		config:         cfg,
 		tasks:          make(map[string]*Task),
 		listeners:      make([]EventListener, 0),
+	}
+	ag.loadTasksFromDisk()
+	return ag
+}
+
+func (a *Agent) loadTasksFromDisk() {
+	if a.config.StoragePath == "" {
+		return
+	}
+	data, err := os.ReadFile(a.config.StoragePath)
+	if err != nil {
+		return
+	}
+	var loaded map[string]*Task
+	if err := json.Unmarshal(data, &loaded); err == nil {
+		a.mu.Lock()
+		for id, t := range loaded {
+			a.tasks[id] = t
+		}
+		a.mu.Unlock()
+	}
+}
+
+func (a *Agent) saveTasksToDisk() {
+	if a.config.StoragePath == "" {
+		return
+	}
+	a.mu.RLock()
+	tasksCopy := make(map[string]*Task, len(a.tasks))
+	for k, v := range a.tasks {
+		tasksCopy[k] = v
+	}
+	a.mu.RUnlock()
+
+	data, err := json.MarshalIndent(tasksCopy, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(a.config.StoragePath, data, 0600)
 	}
 }
 
@@ -142,9 +187,6 @@ func (a *Agent) emit(event Event) {
 
 // CreateTask registers a new task.
 func (a *Agent) CreateTask(sessionID string, prompt string) *Task {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	taskID := fmt.Sprintf("task_%d", time.Now().UnixNano())
 	if sessionID == "" {
 		s := a.sessionManager.GetOrCreate("")
@@ -161,8 +203,12 @@ func (a *Agent) CreateTask(sessionID string, prompt string) *Task {
 		Events:    make([]Event, 0),
 	}
 
+	a.mu.Lock()
 	a.tasks[taskID] = task
+	a.mu.Unlock()
+
 	a.sessionManager.AssociateTask(sessionID, taskID)
+	a.saveTasksToDisk()
 
 	// Audit log task creation
 	a.recordAudit(audit.Entry{
@@ -223,6 +269,7 @@ func (a *Agent) CancelTask(taskID string) error {
 	task.Status = StatusCancelled
 	task.UpdatedAt = time.Now()
 	a.mu.Unlock()
+	a.saveTasksToDisk()
 
 	a.recordAudit(audit.Entry{
 		TaskID:    taskID,
@@ -264,6 +311,7 @@ func (a *Agent) ApproveTool(taskID string, approved bool) error {
 	task.Status = StatusRunning
 	task.UpdatedAt = time.Now()
 	a.mu.Unlock()
+	a.saveTasksToDisk()
 
 	decisionStr := "APPROVED"
 	if !approved {
@@ -303,6 +351,10 @@ func (a *Agent) emitEvent(task *Task, ev Event) {
 	a.mu.Unlock()
 
 	a.emit(ev)
+
+	if ev.Type == EventToolCompleted || ev.Type == EventAgentMessage || ev.Type == EventTaskCompleted {
+		a.saveTasksToDisk()
+	}
 }
 
 // Run executes the agent loop asynchronously for the given task.
@@ -328,6 +380,10 @@ func (a *Agent) Run(parentCtx context.Context, task *Task) {
 }
 
 func (a *Agent) executeLoop(ctx context.Context, task *Task) {
+	startTime := task.CreatedAt
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
 	session := a.sessionManager.GetOrCreate(task.SessionID)
 
 	// Build session security context
@@ -412,6 +468,7 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 	toolDefs := a.registry.ToToolDefinitions()
 	stepCount := 0
 	toolCallCount := 0
+	executedTools := make(map[string]string)
 
 	for {
 		stepCount++
@@ -476,11 +533,12 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 				if streamEv.Delta != "" {
 					accContent.WriteString(streamEv.Delta)
 					a.emitEvent(task, Event{
-						Type:      EventAgentMessageDelta,
-						TaskID:    task.ID,
-						SessionID: task.SessionID,
-						Delta:     streamEv.Delta,
-						Message:   accContent.String(),
+						Type:       EventAgentMessageDelta,
+						TaskID:     task.ID,
+						SessionID:  task.SessionID,
+						Delta:      streamEv.Delta,
+						Message:    accContent.String(),
+						DurationMs: time.Since(startTime).Milliseconds(),
 					})
 				}
 
@@ -531,12 +589,18 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 				finalContent = "Task completed."
 			}
 
+			// Ensure response contains complete synthesized information if tools were executed
+			finalContent = a.ensureComprehensiveResponse(task.Prompt, finalContent, executedTools)
+			assistantMsg.Content = finalContent
+
+			durationMs := time.Since(startTime).Milliseconds()
 			a.sessionManager.AppendMessage(task.SessionID, assistantMsg)
 			a.emitEvent(task, Event{
-				Type:      EventAgentMessage,
-				TaskID:    task.ID,
-				SessionID: task.SessionID,
-				Message:   finalContent,
+				Type:       EventAgentMessage,
+				TaskID:     task.ID,
+				SessionID:  task.SessionID,
+				Message:    finalContent,
+				DurationMs: durationMs,
 			})
 			a.finishTask(task, StatusCompleted, finalContent, "")
 			return
@@ -753,6 +817,7 @@ func (a *Agent) executeLoop(ctx context.Context, task *Task) {
 			if err != nil && toolOutput == "" {
 				toolOutput = fmt.Sprintf("Error: %v", err)
 			}
+			executedTools[toolName] = toolOutput
 
 			messages = append(messages, llm.Message{
 				Role:       llm.RoleTool,
@@ -1131,10 +1196,16 @@ func (a *Agent) parseSingleToolCall(jsonStr string, id string) (llm.ToolCall, bo
 }
 
 func (a *Agent) finishTask(task *Task, status TaskStatus, result string, errMsg string) {
+	durationMs := int64(0)
+	if !task.CreatedAt.IsZero() {
+		durationMs = time.Since(task.CreatedAt).Milliseconds()
+	}
+
 	a.mu.Lock()
 	task.Status = status
 	task.Result = result
 	task.Error = errMsg
+	task.DurationMs = durationMs
 	task.UpdatedAt = time.Now()
 	a.mu.Unlock()
 
@@ -1157,20 +1228,22 @@ func (a *Agent) finishTask(task *Task, status TaskStatus, result string, errMsg 
 	}
 
 	a.recordAudit(audit.Entry{
-		TaskID:    task.ID,
-		SessionID: task.SessionID,
-		Action:    action,
-		Result:    result,
-		Error:     errMsg,
+		TaskID:     task.ID,
+		SessionID:  task.SessionID,
+		Action:     action,
+		Result:     result,
+		Error:      errMsg,
+		DurationMs: durationMs,
 	})
 
 	a.emitEvent(task, Event{
-		Type:      EventTaskCompleted,
-		TaskID:    task.ID,
-		SessionID: task.SessionID,
-		Status:    status,
-		Message:   result,
-		Error:     errMsg,
+		Type:       EventTaskCompleted,
+		TaskID:     task.ID,
+		SessionID:  task.SessionID,
+		Status:     status,
+		Message:    result,
+		Error:      errMsg,
+		DurationMs: durationMs,
 	})
 }
 
@@ -1193,7 +1266,7 @@ func (a *Agent) SelectModelForTask(session *sessions.Session, prompt string) (st
 		codingModel = a.config.DefaultModel
 	}
 	if codingModel == "" {
-		codingModel = "qwen2.5-coder:7b"
+		codingModel = "gpt-oss"
 	}
 
 	generalModel := a.config.GeneralModel
@@ -1201,7 +1274,7 @@ func (a *Agent) SelectModelForTask(session *sessions.Session, prompt string) (st
 		generalModel = a.config.DefaultModel
 	}
 	if generalModel == "" {
-		generalModel = "hermes3:8b"
+		generalModel = "gpt-oss"
 	}
 
 	// 1. Explicit Project Mode session -> Coding Model (e.g. Qwen 2.5 Coder)
@@ -1231,4 +1304,169 @@ func isPureConversationalGreeting(prompt string) bool {
 	}
 	return greetings[trimmed]
 }
+
+var reNumberedItem = regexp.MustCompile(`^\d+\.\s*(?:★\s*)?(?:\[Active\]\s*)?(?:•\s*)?`)
+
+func (a *Agent) ensureComprehensiveResponse(prompt string, content string, toolOutputs map[string]string) string {
+	if len(toolOutputs) == 0 {
+		return content
+	}
+
+	promptLower := strings.ToLower(prompt)
+	contentLower := strings.ToLower(content)
+
+	// 1. Running Applications
+	if rawOut, ok := toolOutputs["list_running_apps"]; ok && rawOut != "" {
+		isAskingRunning := strings.Contains(promptLower, "running app") ||
+			strings.Contains(promptLower, "apps are running") ||
+			strings.Contains(promptLower, "apps are open") ||
+			strings.Contains(promptLower, "applications are open") ||
+			strings.Contains(promptLower, "applications are running") ||
+			strings.Contains(promptLower, "list apps") ||
+			strings.Contains(promptLower, "list running") ||
+			strings.Contains(promptLower, "open apps") ||
+			strings.Contains(promptLower, "which apps") ||
+			strings.Contains(promptLower, "what apps")
+
+		isEvasive := strings.Contains(contentLower, "provided you with a list") ||
+			strings.Contains(contentLower, "list of 28") ||
+			strings.Contains(contentLower, "list of running") ||
+			(strings.Contains(contentLower, "list") && strings.Contains(contentLower, "applications") && !strings.Contains(content, "\n") && !strings.Contains(content, "- ") && !strings.Contains(content, "1."))
+
+		if (isAskingRunning || isEvasive) && !hasMultipleListItems(content) {
+			formatted := formatRunningAppsMarkdown(rawOut)
+			if formatted != "" {
+				return formatted
+			}
+		}
+	}
+
+	// 2. Installed Applications
+	if rawOut, ok := toolOutputs["list_installed_apps"]; ok && rawOut != "" {
+		isAskingInstalled := strings.Contains(promptLower, "installed app") ||
+			strings.Contains(promptLower, "apps are installed") ||
+			strings.Contains(promptLower, "applications are installed") ||
+			strings.Contains(promptLower, "list installed")
+
+		isEvasive := strings.Contains(contentLower, "provided you with a list") ||
+			(strings.Contains(contentLower, "installed") && !strings.Contains(content, "\n") && !strings.Contains(content, "- "))
+
+		if (isAskingInstalled || isEvasive) && !hasMultipleListItems(content) {
+			formatted := formatInstalledAppsMarkdown(rawOut)
+			if formatted != "" {
+				return formatted
+			}
+		}
+	}
+
+	// 3. Directory Listing
+	if rawOut, ok := toolOutputs["list_directory"]; ok && rawOut != "" {
+		isAskingList := strings.Contains(promptLower, "list file") ||
+			strings.Contains(promptLower, "list directory") ||
+			strings.Contains(promptLower, "what files") ||
+			strings.Contains(promptLower, "show files") ||
+			strings.Contains(promptLower, "directory structure") ||
+			strings.Contains(promptLower, "directory tree")
+
+		isEvasive := strings.Contains(contentLower, "provided you with a list") ||
+			strings.Contains(contentLower, "listed the files") ||
+			(strings.Contains(contentLower, "files") && len(strings.Split(content, "\n")) <= 2 && !strings.Contains(content, "- "))
+
+		if (isAskingList || isEvasive) && !hasMultipleListItems(content) {
+			return formatDirectoryMarkdown(rawOut)
+		}
+	}
+
+	return content
+}
+
+func hasMultipleListItems(text string) bool {
+	lines := strings.Split(text, "\n")
+	listCount := 0
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") || (len(trimmed) > 2 && trimmed[0] >= '1' && trimmed[0] <= '9' && trimmed[1] == '.') {
+			listCount++
+		}
+	}
+	return listCount >= 3
+}
+
+func formatRunningAppsMarkdown(raw string) string {
+	lines := strings.Split(raw, "\n")
+	var frontmost string
+	var appItems []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "• Active (Frontmost) Application:") {
+			frontmost = strings.TrimSpace(strings.TrimPrefix(trimmed, "• Active (Frontmost) Application:"))
+			continue
+		}
+		if reNumberedItem.MatchString(trimmed) {
+			item := reNumberedItem.ReplaceAllString(trimmed, "")
+			item = strings.TrimSpace(strings.ReplaceAll(item, "★", ""))
+			if item != "" {
+				appItems = append(appItems, item)
+			}
+		}
+	}
+
+	if len(appItems) == 0 {
+		return raw
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Here are the %d GUI applications currently running on your Mac:\n\n", len(appItems)))
+	for idx, app := range appItems {
+		isFront := frontmost != "" && strings.Contains(app, frontmost)
+		tag := ""
+		if isFront {
+			tag = " *(Active / Frontmost)*"
+		}
+		parts := strings.SplitN(app, " (", 2)
+		if len(parts) == 2 {
+			sb.WriteString(fmt.Sprintf("%d. **%s**%s (%s\n", idx+1, parts[0], tag, parts[1]))
+		} else {
+			sb.WriteString(fmt.Sprintf("%d. **%s**%s\n", idx+1, app, tag))
+		}
+	}
+
+	return strings.TrimSpace(sb.String())
+}
+
+func formatInstalledAppsMarkdown(raw string) string {
+	lines := strings.Split(raw, "\n")
+	var appItems []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if reNumberedItem.MatchString(trimmed) {
+			item := reNumberedItem.ReplaceAllString(trimmed, "")
+			item = strings.TrimSpace(item)
+			if item != "" {
+				appItems = append(appItems, item)
+			}
+		}
+	}
+	if len(appItems) == 0 {
+		return raw
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Here are the installed applications on your Mac (%d found):\n\n", len(appItems)))
+	for idx, app := range appItems {
+		sb.WriteString(fmt.Sprintf("%d. **%s**\n", idx+1, app))
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func formatDirectoryMarkdown(raw string) string {
+	return fmt.Sprintf("Here are the contents of the directory:\n\n```\n%s\n```", strings.TrimSpace(raw))
+}
+
+// EnsureComprehensiveResponseForTest exports ensureComprehensiveResponse for unit testing.
+func (a *Agent) EnsureComprehensiveResponseForTest(prompt, content string, toolOutputs map[string]string) string {
+	return a.ensureComprehensiveResponse(prompt, content, toolOutputs)
+}
+
+
 

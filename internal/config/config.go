@@ -106,9 +106,9 @@ func DefaultConfig() *Config {
 		LLM: LLMConfig{
 			Provider:     "ollama",
 			BaseURL:      "http://127.0.0.1:11434",
-			Model:        "hermes3:8b",
-			CodingModel:  "qwen2.5-coder:7b",
-			GeneralModel: "hermes3:8b",
+			Model:        "gpt-oss",
+			CodingModel:  "gpt-oss",
+			GeneralModel: "gpt-oss",
 			Temperature:  0.2,
 			TimeoutSec:   120,
 		},

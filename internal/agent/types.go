@@ -67,6 +67,7 @@ type Task struct {
 	Status          TaskStatus       `json:"status"`
 	CreatedAt       time.Time        `json:"created_at"`
 	UpdatedAt       time.Time        `json:"updated_at"`
+	DurationMs      int64            `json:"duration_ms,omitempty"`
 	Result          string           `json:"result,omitempty"`
 	Error           string           `json:"error,omitempty"`
 	Events          []Event          `json:"events"`
@@ -84,4 +85,5 @@ type AgentConfig struct {
 	DefaultModel   string
 	CodingModel    string
 	GeneralModel   string
+	StoragePath    string
 }

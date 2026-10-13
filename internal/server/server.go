@@ -801,7 +801,8 @@ const embeddedFallbackHTML = `<!DOCTYPE html>
         }
         appendMsg('bob', '<div class="tool-box">' + content + '</div>', true);
       } else if (ev.type === 'agent.message') {
-        appendMsg('bob', ev.message);
+        let dur = ev.duration_ms ? ' <span style="font-size:11px;color:#8b949e;margin-left:6px;">(' + (ev.duration_ms < 1000 ? ev.duration_ms + 'ms' : (ev.duration_ms/1000).toFixed(1) + 's') + ')</span>' : '';
+        appendMsg('bob', ev.message + dur, true);
       } else if (ev.type === 'agent.error') {
         appendMsg('bob', '❌ Error: ' + ev.error);
       }

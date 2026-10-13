@@ -4,7 +4,21 @@ import { ToolActivity } from './ToolActivity';
 import { ApprovalBanner } from './ApprovalBanner';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { Button } from './ui/button';
-import { ArrowUp, Square, Sparkles, Terminal, Camera, FolderSearch, Loader2, Bot, FolderGit2, ShieldCheck, FolderPlus } from 'lucide-react';
+import { ArrowUp, Square, Sparkles, Terminal, Camera, FolderSearch, Loader2, Bot, FolderGit2, ShieldCheck, FolderPlus, Clock } from 'lucide-react';
+
+const formatDuration = (ms?: number): string => {
+  if (ms === undefined || ms === null || isNaN(ms)) return '';
+  if (ms < 1000) {
+    return `${Math.round(ms)}ms`;
+  }
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}s`;
+  }
+  const mins = Math.floor(seconds / 60);
+  const remainingSecs = Math.round(seconds % 60);
+  return `${mins}m ${remainingSecs}s`;
+};
 
 interface ChatViewProps {
   currentTask: Task | null;
@@ -42,6 +56,56 @@ export const ChatView: React.FC<ChatViewProps> = ({
     (currentTask.status === 'running' ||
       currentTask.status === 'waiting_for_approval' ||
       currentTask.status === 'queued');
+
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!isRunning) return;
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 100);
+    return () => clearInterval(interval);
+  }, [isRunning]);
+
+  const getMessageDuration = (ev: AgentEvent, idx: number): { durationText: string; isLive: boolean } => {
+    const isCurrentTaskRunning =
+      isRunning &&
+      currentTask !== null &&
+      (!ev.task_id || ev.task_id === currentTask.id || ev.task_id === 'pending');
+
+    // If currently running and this is the active in-flight task message, show live elapsed time
+    if (isCurrentTaskRunning) {
+      let startTime = 0;
+      if (currentTask?.created_at) {
+        startTime = new Date(currentTask.created_at).getTime();
+      } else if (ev.timestamp) {
+        startTime = new Date(ev.timestamp).getTime();
+      }
+      if (startTime > 0) {
+        const elapsed = Math.max(0, now - startTime);
+        return { durationText: formatDuration(elapsed), isLive: true };
+      }
+    }
+
+    // Static check: ev.duration_ms
+    if (ev.duration_ms !== undefined && ev.duration_ms > 0) {
+      return { durationText: formatDuration(ev.duration_ms), isLive: false };
+    }
+
+    // Fallback: calculate difference between preceding user prompt and assistant response
+    const userEvent = events
+      .slice(0, idx)
+      .reverse()
+      .find((e) => (e.sender === 'user' || e.type === 'user.message') && (!ev.task_id || !e.task_id || e.task_id === ev.task_id));
+    if (userEvent?.timestamp && ev.timestamp) {
+      const diff = new Date(ev.timestamp).getTime() - new Date(userEvent.timestamp).getTime();
+      if (diff > 0 && diff < 86400000) {
+        return { durationText: formatDuration(diff), isLive: false };
+      }
+    }
+
+    return { durationText: '', isLive: false };
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -253,13 +317,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               // 2. Bob Assistant Message
               if (ev.type === 'agent.message') {
+                const { durationText, isLive } = getMessageDuration(ev, idx);
                 return (
-                  <div key={idx} className="flex items-start gap-2.5 sm:gap-3.5 pr-4 sm:pr-12 animate-fadeIn">
+                  <div key={idx} className="flex items-start gap-2.5 sm:gap-3.5 pr-4 sm:pr-12 animate-fadeIn group">
                     <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-zinc-800 border border-zinc-700/60 flex items-center justify-center text-zinc-300 mt-0.5 flex-shrink-0 shadow-sm">
                       <Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     </div>
                     <div className="flex-1 space-y-2 text-xs sm:text-sm leading-relaxed text-zinc-200 pt-0.5 min-w-0 break-words">
                       <MarkdownRenderer content={ev.message || ''} onImageClick={onViewScreenshot} />
+                      {durationText && (
+                        <div className="flex items-center gap-1.5 pt-1 text-[11px] font-mono text-zinc-500 select-none">
+                          <Clock className={`w-3 h-3 ${isLive ? 'text-zinc-400 animate-pulse' : 'text-zinc-500'}`} />
+                          <span title={isLive ? 'Generating response...' : `Time taken: ${durationText}`}>
+                            {durationText}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -316,9 +389,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               // 5. Error message
               if (ev.type === 'agent.error') {
+                const { durationText } = getMessageDuration(ev, idx);
                 return (
-                  <div key={idx} className="pl-8 sm:pl-10.5 pr-1 sm:pr-2 p-3 rounded-xl bg-red-950/20 border border-red-800/40 text-red-300 text-xs break-words">
-                    {ev.error}
+                  <div key={idx} className="pl-8 sm:pl-10.5 pr-1 sm:pr-2">
+                    <div className="p-3 rounded-xl bg-red-950/20 border border-red-800/40 text-red-300 text-xs break-words space-y-1">
+                      <div>{ev.error}</div>
+                      {durationText && (
+                        <div className="flex items-center gap-1 text-[10px] font-mono text-red-400/80 pt-1">
+                          <Clock className="w-3 h-3" />
+                          <span>{durationText}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               }

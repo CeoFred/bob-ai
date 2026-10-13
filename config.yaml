@@ -8,9 +8,9 @@ server:
 llm:
   provider: "ollama" # "ollama" or "mock"
   base_url: "http://127.0.0.1:11434"
-  model: "hermes3:8b" # Default / Fallback model
-  coding_model: "qwen2.5-coder:7b" # Used for project workspace sessions & coding tasks
-  general_model: "hermes3:8b" # Used for general PC assistant, app control & reasoning
+  model: "gpt-oss" # Default / Fallback model
+  coding_model: "gpt-oss" # Used for project workspace sessions & coding tasks
+  general_model: "gpt-oss" # Used for general PC assistant, app control & reasoning
   temperature: 0.2
   timeout_seconds: 120
 

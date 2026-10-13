@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -394,9 +395,16 @@ func TestAgent_ListRunningAppsExecution(t *testing.T) {
 
 	ag.Run(context.Background(), task)
 
-	time.Sleep(200 * time.Millisecond)
+	var tObj *agent.Task
+	var ok bool
+	for i := 0; i < 20; i++ {
+		tObj, ok = ag.GetTask(task.ID)
+		if ok && (tObj.Status == agent.StatusCompleted || tObj.Status == agent.StatusFailed) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
-	tObj, ok := ag.GetTask(task.ID)
 	if !ok || tObj.Status != agent.StatusCompleted {
 		t.Fatalf("expected task completed, got %v (error: %s)", tObj.Status, tObj.Error)
 	}
@@ -749,35 +757,179 @@ func TestAgent_PronounResolution_CloseIt(t *testing.T) {
 }
 
 func TestAgent_DynamicModelRouting(t *testing.T) {
-	ag, _, _, _ := setupTestAgent(t)
+	tempDir := t.TempDir()
+	mockLLM := llm.NewMockLLM()
+	reg := registry.NewRegistry()
+	policy := security.NewCommandPolicy([]string{"echo", "pwd"}, nil, nil)
+	auditLog, _ := audit.NewLogger(tempDir+"/audit.jsonl", security.NewRedactor())
+	sessMgr := sessions.NewManager(tempDir)
 
-	// 1. General conversation session -> Hermes 3
-	convSess := ag.SessionManager().Create(sessions.SessionTypeConversation, "", "General Chat")
-	model1, reason1 := ag.SelectModelForTask(convSess, "What is the weather today?")
-	if model1 != "hermes3:8b" {
-		t.Errorf("expected hermes3:8b for general conversation, got %q", model1)
+	// 1. By default when configured with gpt-oss, both general and coding route to gpt-oss
+	agDefault := agent.NewAgent(mockLLM, reg, policy, auditLog, sessMgr, agent.AgentConfig{
+		DefaultModel: "gpt-oss",
+		CodingModel:  "gpt-oss",
+		GeneralModel: "gpt-oss",
+	})
+
+	convSess := agDefault.SessionManager().Create(sessions.SessionTypeConversation, "", "General Chat")
+	model1, reason1 := agDefault.SelectModelForTask(convSess, "What is the weather today?")
+	if model1 != "gpt-oss" {
+		t.Errorf("expected gpt-oss for general conversation, got %q", model1)
 	}
 	if reason1 != "General Assistant" {
 		t.Errorf("expected 'General Assistant' reason, got %q", reason1)
 	}
 
-	// 2. Project session -> Qwen 2.5 Coder
-	projSess := ag.SessionManager().Create(sessions.SessionTypeProject, "/Users/codemon_/Documents/Bob-AI", "Project Mode")
-	model2, reason2 := ag.SelectModelForTask(projSess, "How does the agent loop work?")
-	if model2 != "qwen2.5-coder:7b" {
-		t.Errorf("expected qwen2.5-coder:7b for project mode, got %q", model2)
+	projSess := agDefault.SessionManager().Create(sessions.SessionTypeProject, "/Users/codemon_/Documents/Bob-AI", "Project Mode")
+	model2, reason2 := agDefault.SelectModelForTask(projSess, "How does the agent loop work?")
+	if model2 != "gpt-oss" {
+		t.Errorf("expected gpt-oss for project mode, got %q", model2)
 	}
 	if reason2 != "Project Mode" {
 		t.Errorf("expected 'Project Mode' reason, got %q", reason2)
 	}
 
-	// 3. Coding keyword in conversation session -> Qwen 2.5 Coder
-	model3, reason3 := ag.SelectModelForTask(convSess, "Can you write a golang function to calculate fibonacci?")
-	if model3 != "qwen2.5-coder:7b" {
-		t.Errorf("expected qwen2.5-coder:7b for coding prompt, got %q", model3)
+	model3, reason3 := agDefault.SelectModelForTask(convSess, "Can you write a golang function to calculate fibonacci?")
+	if model3 != "gpt-oss" {
+		t.Errorf("expected gpt-oss for coding prompt, got %q", model3)
 	}
 	if reason3 != "Coding Task" {
 		t.Errorf("expected 'Coding Task' reason, got %q", reason3)
+	}
+
+	// 2. Custom multi-model routing when explicit distinct models are configured
+	agSplit := agent.NewAgent(mockLLM, reg, policy, auditLog, sessMgr, agent.AgentConfig{
+		DefaultModel: "gpt-oss",
+		CodingModel:  "qwen2.5-coder:7b",
+		GeneralModel: "hermes3:8b",
+	})
+	mGen, _ := agSplit.SelectModelForTask(convSess, "Hello")
+	if mGen != "hermes3:8b" {
+		t.Errorf("expected hermes3:8b for general task when configured, got %q", mGen)
+	}
+	mCode, _ := agSplit.SelectModelForTask(projSess, "Build project")
+	if mCode != "qwen2.5-coder:7b" {
+		t.Errorf("expected qwen2.5-coder:7b for project task when configured, got %q", mCode)
+	}
+}
+
+func TestAgent_ResponseDurationRecorded(t *testing.T) {
+	respMsg := llm.ChatResponse{
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "Hello codemon! Here is the response you asked for.",
+		},
+		FinishReason: "stop",
+	}
+
+	ag, _, _, _ := setupTestAgent(t, respMsg)
+	task := ag.CreateTask("", "Hello")
+
+	ag.Run(context.Background(), task)
+
+	var tObj *agent.Task
+	var ok bool
+	for i := 0; i < 20; i++ {
+		tObj, ok = ag.GetTask(task.ID)
+		if ok && (tObj.Status == agent.StatusCompleted || tObj.Status == agent.StatusFailed) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if !ok || tObj.Status != agent.StatusCompleted {
+		t.Fatalf("expected task completed, got %v (error: %s)", tObj.Status, tObj.Error)
+	}
+
+	if tObj.DurationMs < 0 {
+		t.Errorf("expected task DurationMs >= 0, got %d", tObj.DurationMs)
+	}
+
+	foundAgentMsg := false
+	foundCompleted := false
+	for _, ev := range tObj.Events {
+		if ev.Type == agent.EventAgentMessage {
+			foundAgentMsg = true
+			if ev.DurationMs < 0 {
+				t.Errorf("expected EventAgentMessage DurationMs >= 0, got %d", ev.DurationMs)
+			}
+		}
+		if ev.Type == agent.EventTaskCompleted {
+			foundCompleted = true
+			if ev.DurationMs < 0 {
+				t.Errorf("expected EventTaskCompleted DurationMs >= 0, got %d", ev.DurationMs)
+			}
+		}
+	}
+
+	if !foundAgentMsg {
+		t.Errorf("expected EventAgentMessage event to be recorded")
+	}
+	if !foundCompleted {
+		t.Errorf("expected EventTaskCompleted event to be recorded")
+	}
+}
+
+func TestAgent_EnsureComprehensiveRunningAppsResponse(t *testing.T) {
+	ag, _, _, _ := setupTestAgent(t)
+
+	toolOut := `Currently Running GUI Applications (3 found):
+• Active (Frontmost) Application: Brave Browser
+
+1. ★ [Active] Brave Browser (Bundle: com.brave.Browser, PID: 726) [CPU: 1.9%, MEM: 1.3%]
+2. • Spotify (Bundle: com.spotify.client, PID: 18355) [CPU: 0.3%, MEM: 0.3%]
+3. • Code (Bundle: com.microsoft.VSCode, PID: 766) [CPU: 0.0%, MEM: 0.4%]`
+
+	toolOutputs := map[string]string{
+		"list_running_apps": toolOut,
+	}
+
+	// 1. Evasive placeholder response from LLM should be enriched with actual apps
+	evasive := "I have provided you with a list of 28 currently running GUI applications on your Mac. If you need further assistance or have any other queries, feel free to ask."
+	enriched := ag.EnsureComprehensiveResponseForTest("what apps are currently running?", evasive, toolOutputs)
+
+	if !strings.Contains(enriched, "Brave Browser") || !strings.Contains(enriched, "Spotify") || !strings.Contains(enriched, "Code") {
+		t.Errorf("expected enriched response to list running applications, got: %s", enriched)
+	}
+
+	// 2. Specific query with already detailed response should be preserved
+	specific := "Yes, Spotify is currently running. It is listed as a GUI application with PID 18355."
+	preserved := ag.EnsureComprehensiveResponseForTest("confirm if spotify app is open", specific, toolOutputs)
+	if preserved != specific {
+		t.Errorf("expected specific response to be preserved, got: %s", preserved)
+	}
+}
+
+func TestAgent_TasksDiskPersistence(t *testing.T) {
+	tempDir := t.TempDir()
+	tasksPath := filepath.Join(tempDir, "tasks.json")
+
+	mockLLM := llm.NewMockLLM()
+	reg := registry.NewRegistry()
+	policy := security.NewCommandPolicy([]string{"echo"}, nil, nil)
+	auditLog, _ := audit.NewLogger(tempDir+"/audit.jsonl", security.NewRedactor())
+	sessMgr := sessions.NewManager(tempDir)
+
+	ag1 := agent.NewAgent(mockLLM, reg, policy, auditLog, sessMgr, agent.AgentConfig{
+		StoragePath: tasksPath,
+	})
+
+	task := ag1.CreateTask("sess_123", "Test prompt")
+	if task == nil {
+		t.Fatal("failed to create task")
+	}
+
+	// Recreate agent pointing to same tasks.json (simulating server restart / new tab)
+	ag2 := agent.NewAgent(mockLLM, reg, policy, auditLog, sessMgr, agent.AgentConfig{
+		StoragePath: tasksPath,
+	})
+
+	loadedTask, ok := ag2.GetTask(task.ID)
+	if !ok || loadedTask == nil {
+		t.Fatalf("expected task %s to be loaded from disk", task.ID)
+	}
+	if loadedTask.Prompt != "Test prompt" {
+		t.Errorf("expected prompt 'Test prompt', got %q", loadedTask.Prompt)
 	}
 }
 

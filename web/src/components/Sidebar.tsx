@@ -74,7 +74,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Sidebar Panel */}
       <aside className={cn(
-        "bg-zinc-950 border-r border-zinc-850 flex flex-col h-full text-zinc-300 select-none flex-shrink-0 z-50",
+        "bg-zinc-950 border-r border-zinc-150 flex flex-col h-full text-zinc-300 select-none flex-shrink-0 z-50",
         // Mobile layout: Drawer overlay
         "fixed inset-y-0 left-0 w-72 sm:w-80 shadow-2xl animate-slideInLeft",
         // Desktop layout: Relative flex column

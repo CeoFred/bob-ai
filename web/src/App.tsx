@@ -203,6 +203,13 @@ export const App: React.FC = () => {
             message: t.prompt,
           });
 
+          // Compute task duration fallback if needed
+          let taskDuration = t.duration_ms;
+          if (taskDuration === undefined && t.created_at && t.updated_at) {
+            const diff = new Date(t.updated_at).getTime() - new Date(t.created_at).getTime();
+            if (diff > 0) taskDuration = diff;
+          }
+
           // Add all events emitted by this task
           if (t.events && t.events.length > 0) {
             const taskEvents: AgentEvent[] = [];
@@ -225,6 +232,9 @@ export const App: React.FC = () => {
                   taskEvents.push(ev);
                 }
               } else {
+                if (ev.type === 'agent.message' && ev.duration_ms === undefined && taskDuration !== undefined) {
+                  ev.duration_ms = taskDuration;
+                }
                 taskEvents.push(ev);
               }
             }
@@ -237,6 +247,7 @@ export const App: React.FC = () => {
               session_id: sessionId,
               timestamp: t.updated_at,
               message: t.result,
+              duration_ms: taskDuration,
             });
           }
 
@@ -292,6 +303,7 @@ export const App: React.FC = () => {
               updated[i] = {
                 ...updated[i],
                 message: ev.message || (updated[i].message || '') + (ev.delta || ''),
+                duration_ms: ev.duration_ms !== undefined ? ev.duration_ms : updated[i].duration_ms,
               };
               return updated;
             }
@@ -306,6 +318,7 @@ export const App: React.FC = () => {
               session_id: ev.session_id,
               timestamp: ev.timestamp || new Date().toISOString(),
               message: ev.message || ev.delta || '',
+              duration_ms: ev.duration_ms,
             },
           ];
         }
@@ -318,6 +331,7 @@ export const App: React.FC = () => {
               updated[i] = {
                 ...updated[i],
                 message: ev.message || updated[i].message,
+                duration_ms: ev.duration_ms !== undefined ? ev.duration_ms : updated[i].duration_ms,
               };
               return updated;
             }
@@ -340,6 +354,25 @@ export const App: React.FC = () => {
     }
 
     if (ev.type === 'task.status' || ev.type === 'task.completed') {
+      if (ev.type === 'task.completed' && ev.duration_ms !== undefined) {
+        setEvents((prev) => {
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].task_id === ev.task_id && prev[i].type === 'agent.message') {
+              if (prev[i].duration_ms === undefined || prev[i].duration_ms === 0) {
+                const updated = [...prev];
+                updated[i] = {
+                  ...updated[i],
+                  duration_ms: ev.duration_ms,
+                };
+                return updated;
+              }
+              break;
+            }
+          }
+          return prev;
+        });
+      }
+
       setCurrentTask((prev) => {
         if (!prev || prev.id === ev.task_id) {
           const newStatus = ev.status || (ev.type === 'task.completed' ? 'completed' : 'running');

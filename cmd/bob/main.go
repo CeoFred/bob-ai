@@ -132,6 +132,7 @@ func main() {
 			DefaultModel:   cfg.LLM.Model,
 			CodingModel:    cfg.LLM.CodingModel,
 			GeneralModel:   cfg.LLM.GeneralModel,
+			StoragePath:    filepath.Join(cfg.Storage.DataDir, "tasks.json"),
 		},
 	)
 

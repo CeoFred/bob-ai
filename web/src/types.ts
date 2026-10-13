@@ -32,6 +32,7 @@ export interface Task {
   status: TaskStatus;
   created_at: string;
   updated_at: string;
+  duration_ms?: number;
   result?: string;
   error?: string;
   events: AgentEvent[];
