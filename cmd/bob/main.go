@@ -104,17 +104,12 @@ func main() {
 
 	// 8. Initialize LLM Provider
 	var llmClient llm.LLM
-	switch cfg.LLM.Provider {
-	case "mock":
-		llmClient = llm.NewMockLLM()
-	default:
-		llmClient = llm.NewOllamaLLM(
+  llmClient = llm.NewOllamaLLM(
 			cfg.LLM.BaseURL,
 			cfg.LLM.Model,
 			time.Duration(cfg.LLM.TimeoutSec)*time.Second,
 		)
-	}
-
+	
 	// 9. Initialize Agent with Dynamic Dual-Model Routing
 	agentCore := agent.NewAgent(
 		llmClient,
@@ -145,6 +140,8 @@ func main() {
 	// 10. Initialize HTTP/WS Server
 	srv := server.NewServer(cfg, agentCore, sessionMgr, auditLogger, codingAgent, webDir)
 
+	agyAvailable,agyIssues := codingAgent.Available()
+
 	// Detect system & Tailscale details for banner
 	sysInfo := config.DetectSystemInfo()
 
@@ -155,8 +152,9 @@ func main() {
 	fmt.Printf("• Apple Silicon: %s\n", sysInfo.CPUModel)
 	fmt.Printf("• System RAM:    %s\n", sysInfo.RAMFormatted)
 	fmt.Printf("• LLM Provider:  %s\n", cfg.LLM.Provider)
-	fmt.Printf("• General Model: %s (OS Pairing & Assistant Tasks)\n", cfg.LLM.GeneralModel)
-	fmt.Printf("• Coding Model:  %s (Project Mode & Code Editing)\n", cfg.LLM.CodingModel)
+	fmt.Printf("• Antigravity available:  %t\n", agyAvailable)
+	fmt.Printf("• Antigravity issues:  %s\n", agyIssues)
+
 	fmt.Printf("• Local URL:     http://localhost:%d\n", cfg.Server.Port)
 	if sysInfo.TailscaleIP != "" {
 		fmt.Printf("• Tailscale URL: http://%s:%d\n", sysInfo.TailscaleIP, cfg.Server.Port)
